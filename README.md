@@ -38,10 +38,6 @@ Red Hat uses Arcade software to create interactive demos. Check out
  to see it in action. -->
 
 
-### Architecture diagrams
-
-![architecture.png](docs/images/architecture.png)
-
 #### Detailed Component Architecture
 
 ```
