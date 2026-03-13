@@ -341,8 +341,6 @@ You can get the OpenShift AI Dashboard URL by:
 # Get the Data Science Gateway route (main access point for OpenShift AI)
 oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}' && echo
 
-# Alternative: Get the RHODS dashboard route
-oc get routes rhods-dashboard -n redhat-ods-applications -o jsonpath='{.spec.host}' && echo
 ```
 
 **Note:** The primary route is `data-science-gateway` in the `openshift-ingress` namespace. This provides access to all OpenShift AI workbenches and projects.
