@@ -8,7 +8,7 @@ metadata:
     opendatahub.io/accelerator-name: ''
     openshift.io/description: ''
     openshift.io/display-name: AnythingLLM
-    notebooks.opendatahub.io/last-image-selection: '{{ .Release.Namespace }}/custom-anythingllm:1.8.5'
+    notebooks.opendatahub.io/last-image-selection: '{{ .Values.images.anythingllm.repository }}:{{ .Values.images.anythingllm.tag }}'
     notebooks.opendatahub.io/last-size-selection: Small
     opendatahub.io/username: quickstart@redhat.com
   name: anythingllm
