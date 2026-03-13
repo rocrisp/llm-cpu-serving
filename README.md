@@ -338,8 +338,14 @@ opt-125m-cpu-predictor-xxxxxxxxxx-xxxxx   2/2     Running     0          2m
 
 You can get the OpenShift AI Dashboard URL by:
 ```bash
-oc get routes rhods-dashboard -n redhat-ods-applications
+# Get the Data Science Gateway route (main access point for OpenShift AI)
+oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}' && echo
+
+# Alternative: Get the RHODS dashboard route
+oc get routes rhods-dashboard -n redhat-ods-applications -o jsonpath='{.spec.host}' && echo
 ```
+
+**Note:** The primary route is `data-science-gateway` in the `openshift-ingress` namespace. This provides access to all OpenShift AI workbenches and projects.
 
 Once inside the dashboard, navigate to **Data Science Projects** → **hr-assistant** (or whatever you named your `${PROJECT}`).
 
@@ -350,6 +356,21 @@ Inside the project you can see Workbenches. Open the **AnythingLLM** workbench.
 ![OpenShift AI Projects](docs/images/rhoai-2.png)
 
 Finally, click on the **Assistant to the HR Representative** Workspace that's pre-created for you and you can start chatting with your assistant! 🎉
+
+#### Direct Access URL
+
+Your AnythingLLM workbench is accessible at:
+
+```
+https://<data-science-gateway-host>/notebook/hr-assistant/anythingllm/
+```
+
+To get the full URL:
+```bash
+echo "https://$(oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}')/notebook/${PROJECT}/anythingllm/"
+```
+
+**Note:** The route `data-science-gateway` in the `openshift-ingress` namespace handles all OpenShift AI workbench traffic and provides OAuth authentication.
 
 #### Example Questions to Try:
 
