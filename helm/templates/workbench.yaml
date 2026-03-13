@@ -86,7 +86,7 @@ spec:
               subPath: ca-bundle.crt
           envFrom:
             - secretRef:
-                name: tinyllama-vllm-cpu
+                name: {{ .Values.model.name }}-vllm-cpu
           image: "{{ .Values.images.anythingllm.repository }}:{{ .Values.images.anythingllm.tag }}"
           workingDir: /opt/app-root/src
         - resources:

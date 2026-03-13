@@ -3,9 +3,9 @@ apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   annotations:
-    openshift.io/display-name: tinyllama-1b-cpu
+    openshift.io/display-name: {{ .Values.model.name }}-cpu
     serving.kserve.io/deploymentMode: RawDeployment
-  name: tinyllama-1b-cpu
+  name: {{ .Values.model.name }}-cpu
   labels:
     opendatahub.io/dashboard: 'true'
     networking.knative.dev/visibility: cluster-local
@@ -25,4 +25,3 @@ spec:
           cpu: {{ .Values.resources.inference.requests.cpu | quote }}
           memory: {{ .Values.resources.inference.requests.memory | quote }}
       runtime: vllm-cpu
-      storageUri: {{ .Values.model.storageUri | quote }}

@@ -17,19 +17,36 @@ spec:
   containers:
     - args:
         - --model
-        - /mnt/models
+        - {{ .Values.model.storageUri | trimPrefix "hf://" }}
         - --port
         - "8080"
         - --max-model-len
         - {{ .Values.model.maxModelLen | quote }}
         - '--served-model-name'
         - {{ .Values.model.name }}
+        - --dtype
+        - float32
+        - --chat-template
+        - /app/chat-template/template.jinja
+      env:
+        - name: VLLM_CPU_DISABLE_AVX512
+          value: "1"
+        - name: ONEDNN_VERBOSE
+          value: "0"
       image: {{ .Values.images.vllmRuntime.repository }}:{{ .Values.images.vllmRuntime.tag }}
       name: kserve-container
       ports:
         - containerPort: 8080
           name: http1
           protocol: TCP
+      volumeMounts:
+        - name: chat-template
+          mountPath: /app/chat-template
+          readOnly: true
+  volumes:
+    - name: chat-template
+      configMap:
+        name: vllm-chat-template
   multiModel: false
   supportedModelFormats:
     - autoSelect: true

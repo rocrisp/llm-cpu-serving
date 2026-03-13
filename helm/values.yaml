@@ -53,11 +53,11 @@ images:
     tag: "0.3"
   anythingllm:
     repository: "quay.io/rh-aiservices-bu/anythingllm-workbench"
-    tag: "1.8.5"
+    tag: "1.9.1"
 
 model:
-  storageUri: "oci://quay.io/rh-aiservices-bu/tinyllama:1.0"
-  name: "tinyllama"
+  storageUri: "hf://facebook/opt-125m"
+  name: "opt-125m"
   maxModelLen: 2048
 
 resources:
@@ -69,4 +69,4 @@ resources:
       cpu: "8"
       memory: "8Gi"
 
-storageClassName: gp3-csi
+storageClassName: ocs-external-storagecluster-ceph-rbd

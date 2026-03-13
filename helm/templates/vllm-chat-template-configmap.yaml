@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-chat-template
+  labels:
+    app.kubernetes.io/managed-by: Helm
+data:
+  template.jinja: |-
+    {{`{%- for message in messages -%}
+    {%- if message['role'] == 'system' -%}
+    {{ message['content'] }}
+
+    {%- endif -%}
+    {%- if message['role'] == 'user' -%}
+    {{ message['content'] }}
+    {%- endif -%}
+    {%- if message['role'] == 'assistant' -%}
+    {{ message['content'] }}
+    {%- endif -%}
+    {%- endfor -%}`}}
