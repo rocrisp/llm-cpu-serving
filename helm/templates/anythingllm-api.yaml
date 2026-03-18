@@ -5,9 +5,8 @@ metadata:
   labels:
     opendatahub.io/dashboard: 'true'
   annotations:
-    opendatahub.io/connection-type-ref: anythingllm-generic-openai
-    openshift.io/description: Connect to a {{ .Values.model.name }} model
-    openshift.io/display-name: vLLM CPU {{ .Values.model.name }}
+    openshift.io/description: API key for AnythingLLM automation
+    openshift.io/display-name: AnythingLLM API Key
 data:
   key: c2stYXV0b21hdGlvbi13b3Jrc3BhY2Utc2V0dXA=
 type: Opaque
