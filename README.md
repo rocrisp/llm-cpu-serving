@@ -443,7 +443,7 @@ oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}
 
 **Note:** The primary route is `data-science-gateway` in the `openshift-ingress` namespace. This provides access to all OpenShift AI workbenches and projects.
 
-Once inside the dashboard, navigate to **Data Science Projects** → **hr-assistant** (or whatever you named your `${PROJECT}`).
+Once inside the dashboard, navigate to **Projects** → **hr-assistant** (or whatever you named your `${PROJECT}`).
 
 ![OpenShift AI Projects](docs/images/rhoai-1.png)
 
