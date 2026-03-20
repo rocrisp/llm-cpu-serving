@@ -17,7 +17,7 @@ spec:
   containers:
     - args:
         - --model
-        - {{ .Values.model.storageUri | trimPrefix "hf://" }}
+        - {{ .Values.model.storageUri | trimPrefix "hf://" | trimPrefix "oci://" }}
         - --port
         - "8080"
         - --max-model-len

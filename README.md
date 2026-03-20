@@ -247,6 +247,55 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1.7B | Best quality, more resources |
 | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 1.1B | Alternative option |
 
+## Model Signing and Verification (Optional)
+
+This chart supports [Sigstore cosign](https://github.com/sigstore/cosign) verification of OCI
+model artifacts before inference. When enabled, a Helm pre-install hook verifies the model
+signature and aborts deployment if it fails.
+
+### Quick Start
+
+```bash
+# 1. Install cosign (https://github.com/sigstore/cosign#installation)
+
+# 2. Generate a keypair
+./scripts/sign-model.sh generate-keys
+
+# 3. Push your model to an OCI registry
+./scripts/sign-model.sh push ./model-files quay.io/your-org/qwen25-05b:v1
+
+# 4. Sign the artifact
+./scripts/sign-model.sh sign quay.io/your-org/qwen25-05b:v1
+
+# 5. Encode the public key for values.yaml
+./scripts/sign-model.sh encode-pubkey
+```
+
+### Enable in values.yaml
+
+```yaml
+model:
+  storageUri: "oci://quay.io/your-org/qwen25-05b:v1"
+  name: "qwen25-05b"
+  maxModelLen: 2048
+
+signing:
+  enabled: true
+  publicKey: "<base64-encoded cosign.pub>"
+```
+
+For keyless (OIDC) verification, leave `publicKey` empty and set:
+
+```yaml
+signing:
+  enabled: true
+  certificateIdentity: "user@example.com"
+  certificateOidcIssuer: "https://accounts.google.com"
+```
+
+On `helm install`, a verification Job runs before any resources are created. If the
+signature is invalid, the install fails and no InferenceService is deployed.
+
 ## Troubleshooting
 
 ### Workbench shows "Notebook image deleted"
@@ -279,6 +328,18 @@ POD=$(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o jsonpa
 oc port-forward -n ${PROJECT} pod/${POD} 8080:8080
 ```
 
+### Cosign verification fails during install
+
+```bash
+# Check the verification Job logs
+oc logs -n ${PROJECT} job/cosign-verify-model
+
+# Verify locally
+cosign verify --key cosign.pub <your-oci-model-ref>
+```
+
+Common causes: wrong public key, unsigned artifact, or registry authentication issues.
+
 ### Storage issues
 
 ```bash
@@ -290,6 +351,12 @@ oc describe pvc anythingllm -n ${PROJECT}
 Update `storageClassName` in [`helm/values.yaml`](helm/values.yaml) if needed.
 
 ## References
+
+**Supply Chain Security:**
+
+- Sigstore cosign: [sigstore/cosign](https://github.com/sigstore/cosign)
+- Model signing: [sigstore/model-transparency](https://github.com/sigstore/model-transparency)
+- ORAS (OCI Registry As Storage): [oras.land](https://oras.land)
 
 **Runtime & Infrastructure:**
 

@@ -162,6 +162,8 @@ oc get storageclass
 - ✅ ServiceAccount (anythingllm-serviceaccount.yaml)
 - ✅ PVC (workbench-pvc.yaml)
 - ✅ Seed Job (init_job.yaml)
+- ✅ Cosign verification Job (cosign-verify-job.yaml, when `signing.enabled`)
+- ✅ Cosign public key Secret (cosign-pubkey-secret.yaml, when `signing.enabled`)
 
 ### Auto-Created by Controllers
 - ❌ Services (owned by Notebook controller)
@@ -240,6 +242,70 @@ helm upgrade hr-assistant helm/ -n hr-assistant
        tag: "1.9.2"  # new version
    ```
 3. Upgrade deployment
+
+## Model Signing with Cosign (Optional)
+
+When `signing.enabled: true` in `helm/values.yaml`, the chart runs a
+[Sigstore cosign](https://github.com/sigstore/cosign) verification Job as a Helm
+pre-install hook. The model must be stored as a signed OCI artifact instead of
+loaded directly from HuggingFace.
+
+### Prerequisites
+
+- [cosign v3+](https://github.com/sigstore/cosign#installation)
+- [oras](https://oras.land) (for pushing model files to OCI registries)
+- Write access to an OCI registry (e.g., quay.io)
+
+### Workflow
+
+1. **Push model to OCI registry:**
+   ```bash
+   ./scripts/sign-model.sh push ./model-files quay.io/your-org/qwen25-05b:v1
+   ```
+
+2. **Sign the artifact:**
+   ```bash
+   ./scripts/sign-model.sh sign quay.io/your-org/qwen25-05b:v1
+   ```
+
+3. **Encode public key and update values.yaml:**
+   ```bash
+   ./scripts/sign-model.sh encode-pubkey
+   ```
+   Then set in `helm/values.yaml`:
+   ```yaml
+   model:
+     storageUri: "oci://quay.io/your-org/qwen25-05b:v1"
+
+   signing:
+     enabled: true
+     publicKey: "<base64-encoded cosign.pub>"
+   ```
+
+4. **Deploy as normal** — the verification Job runs automatically before resources
+   are created. If the signature is invalid, Helm aborts the install.
+
+### Key-Based vs Keyless
+
+- **Key-based:** Generate a keypair with `./scripts/sign-model.sh generate-keys`.
+  Store `cosign.pub` in `signing.publicKey`. Best for air-gapped environments.
+- **Keyless (OIDC):** Leave `publicKey` empty, set `certificateIdentity` and
+  `certificateOidcIssuer`. Best for CI/CD pipelines with OIDC providers
+  (GitHub, Google, Microsoft).
+
+### Troubleshooting
+
+If `helm install` fails with a cosign verification error:
+
+```bash
+oc logs -n ${PROJECT} job/cosign-verify-model
+```
+
+Common causes:
+- Model artifact was not signed
+- Wrong public key in `signing.publicKey`
+- Registry authentication not configured in the cluster
+- `model.storageUri` still uses `hf://` instead of `oci://`
 
 ## Summary
 

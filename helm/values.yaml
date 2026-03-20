@@ -70,3 +70,12 @@ resources:
       memory: "8Gi"
 
 storageClassName: ocs-external-storagecluster-ceph-rbd
+
+signing:
+  enabled: false
+  cosignImage: "ghcr.io/sigstore/cosign/cosign:v3.0.5"
+  # Key-based verification: base64-encoded contents of cosign.pub
+  publicKey: ""
+  # Keyless verification (OIDC identity-based) — leave publicKey empty to use these:
+  # certificateIdentity: ""
+  # certificateOidcIssuer: ""
