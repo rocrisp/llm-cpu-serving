@@ -5,7 +5,7 @@ Access the Workbench through the Data Science project **{{ .Release.Namespace }}
 Check pod status:
   oc get pods -n {{ .Release.Namespace }}
 
-The predictor pod will show Init:0/1 while the model-validation init container
+The predictor pod will show Init:1/2 while the model-validation init container
 verifies the model signature, then transition to Running once verified.
 
 Validate signing:

@@ -138,11 +138,17 @@ oc get pods -n model-validation-operator-system
 oc get crd modelvalidations.ml.sigstore.dev
 ```
 
-#### 6. Signed Model
+#### 6. Model
 
-The model must be signed and packaged as an OCI image before deployment. See
-[Sign a Model](#sign-a-model) for the full workflow. The default `values.yaml`
-ships with a pre-signed model at `quay.io/rocrisp/qwen25-05b-signed:v2`.
+Models can be deployed through any Kserve-supported storage transport,
+including Huggingface and S3-compatible storage. By default, the Huggingface
+model `hf://Qwen/Qwen2.5-0.5B-Instruct` is used.
+
+You can set the storage URI for a desired model through `models.storageUri`.
+
+If you are deploying a signed model, you can enable verification at runtime
+by setting `signing.enabled` to true. More options for the runtime validation
+are available below.
 
 ### Clone
 
@@ -178,11 +184,9 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 
 Helm executes in this order:
 
-1. **Pre-install hook** — creates the `model-storage` PVC and runs the
-   `model-download` Job to copy the signed model from the OCI image to the PVC
-2. **Main resources** — creates the `ModelValidation` CR, `ServingRuntime`,
+1. **Main resources** — creates the `ModelValidation` CR, `ServingRuntime`,
    `InferenceService`, AnythingLLM workbench, and supporting resources
-3. **Operator webhook** — the Model Validation Operator detects the predictor pod
+2. **Operator webhook** — the Model Validation Operator detects the predictor pod
    and injects a `model-validation` init container that verifies the signature
 
 ### Wait for pods
@@ -195,14 +199,13 @@ Watch the deployment progress:
 
 ```
 NAME                                            READY   STATUS      RESTARTS   AGE
-model-download-xxxxx                            0/1     Completed   0          30s    <-- signed model copied to PVC
 anythingllm-0                                   3/3     Running     0          2m
 anythingllm-seed-xxxxx                          0/1     Completed   0          2m
-<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      0/2     Init:0/1    0          30s    <-- verifying signature
+<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      0/3     Init:1/2    0          30s    <-- verifying signature
 <model-name>-cpu-predictor-xxxxxxxxx-xxxxx      2/2     Running     0          90s    <-- verification passed
 ```
 
-The `Init:0/1` phase is the Model Validation Operator's init container verifying
+The `Init:1/2` phase is the Model Validation Operator's init container verifying
 the cryptographic signature. Once it passes, the pod transitions to `Running`.
 If verification fails, the pod stays in `Init:Error` and the model is never served.
 
@@ -264,34 +267,21 @@ flow is working end-to-end:
 PROJECT="hr-assistant"
 MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
 
-# Step 1: Confirm the model-download Job completed
-echo "=== Step 1: model-download Job ==="
-oc get job model-download -n ${PROJECT}
-# Expected: COMPLETIONS = 1/1
+# Step 1: Confirm that Kserve downloaded the model
+echo "=== Step 3: Model downloaded ==="
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializer
 
-# Step 2: Verify the model + signature are on the PVC
-echo "=== Step 2: Model files on PVC ==="
-oc exec -n ${PROJECT} $(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor \
-    -o jsonpath='{.items[0].metadata.name}') -c kserve-container -- ls -la /data/signed-model/model.sig
-# Expected: the model.sig file exists
-
-# Step 3: Confirm the operator injected the init container
-echo "=== Step 3: Init container injected ==="
-oc get pod -n ${PROJECT} -l serving.kserve.io/inferenceservice \
-    -o jsonpath='{range .items[*]}{.spec.initContainers[*].name}{"\n"}{end}'
-# Expected: model-validation
-
-# Step 4: Check verification succeeded
+# Step 2: Check verification succeeded
 echo "=== Step 4: Verification result ==="
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
 # Expected: "Verification succeeded"
 
-# Step 5: Confirm model is loaded from PVC (not HuggingFace)
+# Step 3: Confirm model is loaded
 echo "=== Step 5: Model source ==="
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c kserve-container | head -5
 # Expected: model path shows /data/signed-model
 
-# Step 6: Test inference through the verified model
+# Step 4: Test inference through the verified model
 echo "=== Step 6: Inference test ==="
 oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
     curl -s http://${MODEL_NAME}-cpu-predictor:8080/v1/chat/completions \
@@ -300,7 +290,7 @@ oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
 # Expected: JSON response with choices[0].message.content
 ```
 
-All 6 steps passing confirms: the signed model was downloaded, the operator
+All steps passing confirms: the signed model was downloaded, the operator
 injected the verification init container, the signature was verified, and the
 model is serving traffic through the verified path.
 
@@ -362,19 +352,14 @@ using the [Model Validation Operator](https://github.com/sigstore/model-validati
 and [Sigstore model-signing](https://github.com/sigstore/model-transparency).
 The deployment flow is:
 
-1. **model-download** (Helm pre-install hook) — copies a pre-signed model from an
-   OCI image (or downloads a `.tar.gz` archive) onto a PVC
-2. **ModelValidation CR** — tells the operator how to verify the model (public key
+1. **ModelValidation CR** — tells the operator how to verify the model (public key
    or Sigstore keyless)
-3. **Webhook injection** — the operator's mutating webhook intercepts the predictor
+2. **Webhook injection** — the operator's mutating webhook intercepts the predictor
    pod (via the `validation.ml.sigstore.dev/ml` label) and injects a
    `model-validation` init container
-4. **Init container verification** — the injected init container verifies the model
+3. **Init container verification** — the injected init container verifies the model
    signature before the main vLLM container starts. If verification fails, the pod
    stays in `Init:Error` and never serves traffic
-
-The predictor pod then mounts the PVC and loads the verified model from
-`/data/signed-model` instead of downloading from HuggingFace.
 
 ### Architecture
 
@@ -382,10 +367,7 @@ The predictor pod then mounts the PVC and loads the verified model from
 helm install
     |
     v
-[PVC created] --> [model-download Job] --> model files + model.sig on PVC
-                                                |
-                                                v
-                  [ModelValidation CR] <--- created by Helm
+[PVC created] --> [ModelValidation CR] <--- created by Helm
                   [InferenceService]   <--- label: validation.ml.sigstore.dev/ml
                                                 |
                                                 v
@@ -443,9 +425,7 @@ podman push quay.io/yourorg/signed-model:v1
 ```yaml
 signing:
   enabled: true
-  modelImage: "quay.io/yourorg/signed-model:v1"
   signaturePath: "model.sig"
-  storageSize: "2Gi"
   ignoreGitPaths: true
   publicKeyData: |
     -----BEGIN PUBLIC KEY-----
@@ -458,9 +438,7 @@ signing:
 ```yaml
 signing:
   enabled: true
-  modelImage: "quay.io/yourorg/signed-model:v1"
   signaturePath: "model.sig"
-  storageSize: "2Gi"
   ignoreGitPaths: true
   certificateIdentity: "user@example.com"
   certificateOidcIssuer: "https://accounts.google.com"
@@ -470,15 +448,12 @@ signing:
 
 On `helm install`:
 
-1. The **model-storage PVC** is created (pre-install hook, weight -10)
-2. The **model-download Job** copies model files from the OCI image to the PVC
-   (pre-install hook, weight -5)
-3. Helm creates the **ModelValidation CR**, **signing-pubkey Secret**,
+1. Helm creates the **ModelValidation CR**, **signing-pubkey Secret**,
    **ServingRuntime**, and **InferenceService**
-4. When the predictor pod is created, the operator's webhook detects the
+2. When the predictor pod is created, the operator's webhook detects the
    `validation.ml.sigstore.dev/ml` label and injects a `model-validation` init
    container that inherits all volume mounts from the main containers
-5. The init container runs the verification agent — on success, the pod proceeds
+3. The init container runs the verification agent — on success, the pod proceeds
    to start vLLM; on failure, the pod stays in `Init:Error` and the model is
    never served
 
@@ -486,8 +461,6 @@ On `helm install`:
 
 | Resource | Purpose |
 |---|---|
-| `PersistentVolumeClaim/model-storage` | Stores the signed model (pre-install hook) |
-| `Job/model-download` | Copies model from OCI image to PVC (pre-install hook) |
 | `Secret/model-signing-pubkey` | Public key for verification (key-based only) |
 | `ModelValidation/<name>-validation` | Tells operator how to verify the model |
 | `InferenceService` | Predictor pod with `validation.ml.sigstore.dev/ml` label |

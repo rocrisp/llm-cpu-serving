@@ -14,9 +14,12 @@ spec:
       certificateOidcIssuer: {{ .Values.signing.certificateOidcIssuer | quote }}
     {{- end }}
   model:
-    path: /data/signed-model
-    signaturePath: /data/signed-model/{{ .Values.signing.signaturePath | default "model.sig" }}
+    path: /mnt/models
+    signaturePath: /mnt/models/{{ .Values.signing.signaturePath | default "model.sig" }}
     {{- if .Values.signing.ignoreGitPaths }}
     ignoreGitPaths: true
+    {{- end }}
+    {{- if .Values.signing.ignorePaths }}
+    ignorePaths: {{ .Values.signing.ignorePaths | toJson }}
     {{- end }}
 {{- end }}

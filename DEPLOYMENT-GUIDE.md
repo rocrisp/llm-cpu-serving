@@ -162,8 +162,6 @@ oc get storageclass
 - ✅ ServiceAccount (anythingllm-serviceaccount.yaml)
 - ✅ PVC (workbench-pvc.yaml)
 - ✅ Seed Job (init_job.yaml)
-- ✅ Model storage PVC (model-storage-pvc.yaml, pre-install hook)
-- ✅ Model download Job (model-download-job.yaml, pre-install hook)
 - ✅ ModelValidation CR (model-validation-cr.yaml)
 - ✅ Signing public key Secret (signing-pubkey-secret.yaml)
 - ✅ Vector DB attestation Job (vectordb-attestation-job.yaml, when `attestation.enabled`)
@@ -257,13 +255,11 @@ to enforce cryptographic model verification before the predictor pod serves traf
 
 ### How It Works
 
-1. **model-download Job** (pre-install hook) — copies signed model from an OCI
-   image (or downloads a `.tar.gz` archive) onto a PVC
-2. **ModelValidation CR** — tells the operator how to verify the model
-3. **Operator webhook** — intercepts the predictor pod (via the
+1. **ModelValidation CR** — tells the operator how to verify the model
+2. **Operator webhook** — intercepts the predictor pod (via the
    `validation.ml.sigstore.dev/ml` label) and injects a `model-validation`
    init container
-4. **Init container** — verifies the signature; if it fails, the pod stays
+3. **Init container** — verifies the signature; if it fails, the pod stays
    in `Init:Error` and never serves traffic
 
 ### Prerequisites
@@ -306,9 +302,7 @@ podman push quay.io/yourorg/signed-model:v1
 ```yaml
 signing:
   enabled: true
-  modelImage: "quay.io/yourorg/signed-model:v1"
   signaturePath: "model.sig"
-  storageSize: "2Gi"
   ignoreGitPaths: true
   publicKeyData: |
     -----BEGIN PUBLIC KEY-----

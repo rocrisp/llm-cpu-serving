@@ -20,6 +20,7 @@ spec:
     model:
       modelFormat:
         name: vLLM
+      storageUri: {{ .Values.model.storageUri }}
       name: ''
       resources:
         limits:

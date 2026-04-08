@@ -17,11 +17,7 @@ spec:
   containers:
     - args:
         - --model
-        {{- if .Values.signing.enabled }}
-        - /data/signed-model
-        {{- else }}
-        - {{ .Values.model.storageUri | trimPrefix "hf://" | trimPrefix "oci://" }}
-        {{- end }}
+        - /mnt/models
         - --port
         - "8080"
         - --max-model-len
@@ -41,28 +37,17 @@ spec:
         - containerPort: 8080
           name: http1
           protocol: TCP
+      {{- if (and .Values.signing.enabled .Values.signing.publicKeyData) }}
       volumeMounts:
-        {{- if .Values.signing.enabled }}
-        - name: model-data
-          mountPath: /data/signed-model
-        {{- if .Values.signing.publicKeyData }}
         - name: signing-key
           mountPath: /keys
           readOnly: true
-        {{- end }}
-        {{- else }}
-        []
-        {{- end }}
-  {{- if .Values.signing.enabled }}
+      {{- end }}
+  {{- if (and .Values.signing.enabled .Values.signing.publicKeyData) }}
   volumes:
-    - name: model-data
-      persistentVolumeClaim:
-        claimName: model-storage
-    {{- if .Values.signing.publicKeyData }}
     - name: signing-key
       secret:
         secretName: model-signing-pubkey
-    {{- end }}
   {{- end }}
   multiModel: false
   supportedModelFormats:
