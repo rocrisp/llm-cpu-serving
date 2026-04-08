@@ -79,30 +79,33 @@ if oc get imagestream custom-anythingllm -n redhat-ods-applications &>/dev/null;
     IMAGE_TAG=$(oc get imagestream custom-anythingllm -n redhat-ods-applications -o jsonpath='{.spec.tags[0].name}' 2>/dev/null)
     print_success "ImageStream 'custom-anythingllm' exists (tag: $IMAGE_TAG)"
 else
-    print_failure "ImageStream 'custom-anythingllm' not found in 'redhat-ods-applications' namespace"
-    echo ""
-    echo "  Create it with:"
-    echo "  ${YELLOW}cat <<EOF | oc apply -f -"
-    echo "  apiVersion: image.openshift.io/v1"
-    echo "  kind: ImageStream"
-    echo "  metadata:"
-    echo "    name: custom-anythingllm"
-    echo "    namespace: redhat-ods-applications"
-    echo "    labels:"
-    echo "      opendatahub.io/notebook-image: \"true\""
-    echo "  spec:"
-    echo "    lookupPolicy:"
-    echo "      local: true"
-    echo "    tags:"
-    echo "      - name: \"1.9.1\""
-    echo "        from:"
-    echo "          kind: DockerImage"
-    echo "          name: quay.io/rh-aiservices-bu/anythingllm-workbench:1.9.1"
-    echo "        importPolicy:"
-    echo "          scheduled: true"
-    echo "        referencePolicy:"
-    echo "          type: Local"
-    echo "  EOF${NC}"
+    print_warning "ImageStream 'custom-anythingllm' not found — creating it now..."
+    cat <<EOF | oc apply -f -
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: custom-anythingllm
+  namespace: redhat-ods-applications
+  labels:
+    opendatahub.io/notebook-image: "true"
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: "1.9.1"
+      from:
+        kind: DockerImage
+        name: quay.io/rh-aiservices-bu/anythingllm-workbench:1.9.1
+      importPolicy:
+        scheduled: true
+      referencePolicy:
+        type: Local
+EOF
+    if [ $? -eq 0 ]; then
+        print_success "ImageStream 'custom-anythingllm' created successfully"
+    else
+        print_failure "Failed to create ImageStream 'custom-anythingllm'"
+    fi
 fi
 echo ""
 
@@ -144,7 +147,28 @@ else
 fi
 echo ""
 
-# Check 7: Service Mesh (optional - KServe can use OpenShift Ingress Gateway)
+# Check 7: Model Validation Operator (optional — for model signing verification)
+echo "Checking Model Validation Operator..."
+if oc get crd modelvalidations.ml.sigstore.dev &>/dev/null; then
+    print_success "Model Validation Operator CRD installed"
+    MVO_NS="model-validation-operator-system"
+    if oc get deployment model-validation-controller-manager -n "$MVO_NS" &>/dev/null; then
+        MVO_READY=$(oc get deployment model-validation-controller-manager -n "$MVO_NS" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+        if [ "${MVO_READY:-0}" -gt 0 ]; then
+            print_success "Model Validation Operator is running ($MVO_READY replicas)"
+        else
+            print_warning "Model Validation Operator deployment exists but has no ready replicas"
+        fi
+    else
+        print_warning "Model Validation Operator deployment not found in $MVO_NS"
+    fi
+else
+    print_warning "Model Validation Operator not installed (optional — needed for signing.enabled)"
+    echo "  Install: oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm"
+fi
+echo ""
+
+# Check 8: Service Mesh (optional - KServe can use OpenShift Ingress Gateway)
 echo "Checking Service Mesh..."
 if oc get ns istio-system &>/dev/null; then
     print_success "Istio (Service Mesh) namespace exists"
@@ -167,7 +191,7 @@ else
 fi
 echo ""
 
-# Check 8: Resource availability (if namespace exists)
+# Check 9: Resource availability (if namespace exists)
 PROJECT="hr-assistant"
 if oc get project "$PROJECT" &>/dev/null; then
     echo "Checking existing project '$PROJECT'..."

@@ -71,11 +71,30 @@ resources:
 
 storageClassName: ocs-external-storagecluster-ceph-rbd
 
-signing:
+attestation:
   enabled: false
-  cosignImage: "ghcr.io/sigstore/cosign/cosign:v3.0.5"
-  # Key-based verification: base64-encoded contents of cosign.pub
-  publicKey: ""
-  # Keyless verification (OIDC identity-based) — leave publicKey empty to use these:
-  # certificateIdentity: ""
-  # certificateOidcIssuer: ""
+  schedule: "0 */6 * * *"
+  vectorDbPath: "/opt/app-root/src/anythingllm/storage/lancedb"
+
+signing:
+  enabled: true
+  # OCI image containing signed model files at /model/ (preferred over modelArchiveUrl)
+  modelImage: "quay.io/rocrisp/qwen25-05b-signed:v2"
+  # URL to a tar.gz archive (alternative to modelImage)
+  modelArchiveUrl: ""
+  # Path to the signature file relative to model root
+  signaturePath: "model.sig"
+  # PVC size for signed model storage
+  storageSize: "2Gi"
+  # Sigstore keyless verification (OIDC identity-based) — used when publicKeyData is empty
+  certificateIdentity: ""
+  certificateOidcIssuer: ""
+  # PEM-encoded public key for key-based verification
+  publicKeyData: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBPWWUE+WjcQ2emor95fzkumMcmDp
+    XJU7gQ8k8c8XHH/eKy0lkOy8Ds9Qd37gUpEA4ZqLck02zIADudr0p0WbYg==
+    -----END PUBLIC KEY-----
+  # Ignore git metadata files during verification
+  ignoreGitPaths: true
+  # ignorePaths: []

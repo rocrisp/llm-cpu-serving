@@ -1,0 +1,34 @@
+{{- if .Values.attestation.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vectordb-integrity
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vectordb-integrity
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["vectordb-attestation"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vectordb-integrity
+subjects:
+  - kind: ServiceAccount
+    name: vectordb-integrity
+roleRef:
+  kind: Role
+  name: vectordb-integrity
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

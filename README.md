@@ -47,6 +47,8 @@ Example AWS instance: [m6i.4xlarge](https://instances.vantage.sh/aws/ec2/m6i.4xl
 - [Single-model server dependencies](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.16/html/installing_and_uninstalling_openshift_ai_self-managed/installing-the-single-model-serving-platform_component-install#configuring-automated-installation-of-kserve_component-install):
   - Red Hat OpenShift Service Mesh
   - Red Hat OpenShift Serverless
+- [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+  (optional — required only when `signing.enabled: true`)
 
 ### Permissions
 
@@ -168,6 +170,17 @@ anythingllm-seed-xxxxx                          0/1     Completed   0          2
 > The predictor pod may take 30-60 seconds to become ready as it downloads the model
 > from HuggingFace on first start.
 
+When `signing.enabled: true`, you will also see:
+
+```
+NAME                                            READY   STATUS      RESTARTS   AGE
+model-download-xxxxx                            0/1     Completed   0          2m
+<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      2/2     Running     0          90s
+```
+
+The predictor pod will briefly show `Init:0/1` while the operator's model
+validation init container verifies the signature, then transition to `Running`.
+
 ### Test
 
 Get the OpenShift AI Dashboard URL:
@@ -249,52 +262,248 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 
 ## Model Signing and Verification (Optional)
 
-This chart supports [Sigstore cosign](https://github.com/sigstore/cosign) verification of OCI
-model artifacts before inference. When enabled, a Helm pre-install hook verifies the model
-signature and aborts deployment if it fails.
+This chart supports cryptographic model verification using the
+[Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+and [Sigstore model-signing](https://github.com/sigstore/model-transparency). When
+`signing.enabled: true`, the deployment flow becomes:
 
-### Quick Start
+1. **model-download** (Helm pre-install hook) — copies a pre-signed model from an
+   OCI image (or downloads a `.tar.gz` archive) onto a PVC
+2. **ModelValidation CR** — tells the operator how to verify the model (public key
+   or Sigstore keyless)
+3. **Webhook injection** — the operator's mutating webhook intercepts the predictor
+   pod (via the `validation.ml.sigstore.dev/ml` label) and injects a
+   `model-validation` init container
+4. **Init container verification** — the injected init container verifies the model
+   signature before the main vLLM container starts. If verification fails, the pod
+   stays in `Init:Error` and never serves traffic
+
+The predictor pod then mounts the PVC and loads the verified model from
+`/data/signed-model` instead of downloading from HuggingFace.
+
+### Architecture
+
+```
+helm install
+    |
+    v
+[PVC created] --> [model-download Job] --> model files + model.sig on PVC
+                                                |
+                                                v
+                  [ModelValidation CR] <--- created by Helm
+                  [InferenceService]   <--- label: validation.ml.sigstore.dev/ml
+                                                |
+                                                v
+                  [Operator Webhook] -------> injects init container
+                                                |
+                                                v
+                  [model-validation init] --> verifies signature
+                                                |  (pass)
+                                                v
+                  [kserve-container]   -------> loads model from /data/signed-model
+```
+
+### Prerequisites
+
+1. **Model Validation Operator** installed on the cluster:
 
 ```bash
-# 1. Install cosign (https://github.com/sigstore/cosign#installation)
+# Install via OLM (OpenShift)
+oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
 
-# 2. Generate a keypair
-./scripts/sign-model.sh generate-keys
-
-# 3. Push your model to an OCI registry
-./scripts/sign-model.sh push ./model-files quay.io/your-org/qwen25-05b:v1
-
-# 4. Sign the artifact
-./scripts/sign-model.sh sign quay.io/your-org/qwen25-05b:v1
-
-# 5. Encode the public key for values.yaml
-./scripts/sign-model.sh encode-pubkey
+# Or for non-OLM clusters with cert-manager
+kubectl apply -k https://github.com/sigstore/model-validation-operator/config/overlays/production
 ```
+
+Verify the operator is running:
+
+```bash
+oc get pods -n model-validation-operator-system
+oc get crd modelvalidations.ml.sigstore.dev
+```
+
+2. **model-signing** Python package (for signing models locally):
+
+```bash
+pip install model-signing
+```
+
+### Quick Start — Sign a Model
+
+```bash
+# 1. Download the model locally
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
+
+# 2. Generate a signing key pair
+openssl ecparam -genkey -name prime256v1 -noout -out signing-key.pem
+openssl ec -in signing-key.pem -pubout -out signing-key.pub
+
+# 3. Sign the model with your private key
+python3 -m model_signing sign key \
+    --private_key signing-key.pem \
+    --signature ./model-files/model.sig \
+    --ignore-git-paths \
+    ./model-files
+
+# 4. Verify locally
+python3 -m model_signing verify key \
+    --public_key signing-key.pub \
+    --signature ./model-files/model.sig \
+    --ignore-git-paths \
+    ./model-files
+
+# 5. Package as an OCI image and push to a registry
+cat > Containerfile <<EOF
+FROM busybox:latest
+COPY model-files/ /model/
+EOF
+podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
+podman push quay.io/yourorg/signed-model:v1
+```
+
+> The helper script `./scripts/sign-model.sh` wraps the sign, verify, and archive
+> steps. Run `./scripts/sign-model.sh` without arguments for usage.
 
 ### Enable in values.yaml
 
-```yaml
-model:
-  storageUri: "oci://quay.io/your-org/qwen25-05b:v1"
-  name: "qwen25-05b"
-  maxModelLen: 2048
+**Key-based verification** (recommended for air-gapped or private models):
 
+```yaml
 signing:
   enabled: true
-  publicKey: "<base64-encoded cosign.pub>"
+  modelImage: "quay.io/yourorg/signed-model:v1"
+  signaturePath: "model.sig"
+  storageSize: "2Gi"
+  ignoreGitPaths: true
+  publicKeyData: |
+    -----BEGIN PUBLIC KEY-----
+    <paste contents of signing-key.pub>
+    -----END PUBLIC KEY-----
 ```
 
-For keyless (OIDC) verification, leave `publicKey` empty and set:
+**Sigstore keyless verification** (ties to an OIDC identity — no key management):
 
 ```yaml
 signing:
   enabled: true
+  modelImage: "quay.io/yourorg/signed-model:v1"
+  signaturePath: "model.sig"
+  storageSize: "2Gi"
+  ignoreGitPaths: true
   certificateIdentity: "user@example.com"
   certificateOidcIssuer: "https://accounts.google.com"
 ```
 
-On `helm install`, a verification Job runs before any resources are created. If the
-signature is invalid, the install fails and no InferenceService is deployed.
+### How It Works on Deploy
+
+On `helm install`:
+
+1. The **model-storage PVC** is created (pre-install hook, weight -10)
+2. The **model-download Job** copies model files from the OCI image to the PVC
+   (pre-install hook, weight -5)
+3. Helm creates the **ModelValidation CR**, **signing-pubkey Secret** (if using
+   key-based verification), **ServingRuntime**, and **InferenceService**
+4. When the predictor pod is created, the operator's webhook detects the
+   `validation.ml.sigstore.dev/ml` label and injects a `model-validation` init
+   container that inherits all volume mounts from the main containers
+5. The init container runs the verification agent — on success, the pod proceeds
+   to start vLLM; on failure, the pod stays in `Init:Error`
+
+### Helm Resources Created
+
+| Resource | Purpose |
+|---|---|
+| `PersistentVolumeClaim/model-storage` | Stores the signed model (pre-install hook) |
+| `Job/model-download` | Copies model from OCI image to PVC (pre-install hook) |
+| `Secret/model-signing-pubkey` | Public key for verification (key-based only) |
+| `ModelValidation/<name>-validation` | Tells operator how to verify the model |
+| `InferenceService` | Predictor pod with `validation.ml.sigstore.dev/ml` label |
+| `ServingRuntime` | vLLM runtime with PVC + key volume mounts |
+
+### Testing Model Validation
+
+After deploying with `signing.enabled: true`:
+
+```bash
+PROJECT="hr-assistant"
+
+# 1. Check the model-download Job completed
+oc logs -n ${PROJECT} job/model-download
+
+# 2. Check the operator injected the init container
+oc get pods -n ${PROJECT} -l serving.kserve.io/inferenceservice -o jsonpath='{.items[0].spec.initContainers[*].name}'
+# Expected: model-validation
+
+# 3. Check the init container verification succeeded
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
+# Expected: "Verification succeeded"
+
+# 4. Check the operator logs
+oc logs -n model-validation-operator-system deployment/model-validation-controller-manager --tail=20
+
+# 5. Verify the model is loaded from the PVC (not HuggingFace)
+MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
+oc exec -n ${PROJECT} $(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o jsonpath='{.items[0].metadata.name}') \
+    -c kserve-container -- curl -s http://localhost:8080/v1/models | python3 -m json.tool
+# root should show "/data/signed-model"
+
+# 6. Test inference
+oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
+    curl -s http://${MODEL_NAME}-cpu-predictor:8080/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"${MODEL_NAME}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":30}"
+```
+
+### What Happens on Verification Failure
+
+If the model signature is invalid or missing, the init container exits with an
+error. The predictor pod will show `Init:Error` and never start serving:
+
+```bash
+# Check what went wrong
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
+
+# Common causes:
+# - model.sig missing from the OCI image
+# - Wrong public key (doesn't match the key used to sign)
+# - Model files modified after signing
+# - Wrong certificateIdentity/certificateOidcIssuer (keyless mode)
+```
+
+### Disabling Model Signing
+
+Set `signing.enabled: false` in `values.yaml`. The chart reverts to downloading
+the model directly from HuggingFace via `model.storageUri`.
+
+## Vector DB Attestation and Integrity (Optional)
+
+When `attestation.enabled: true`, the chart creates a baseline SHA-512 hash of the
+LanceDB vector database after document seeding and periodically verifies it hasn't
+been tampered with.
+
+### Enable in values.yaml
+
+```yaml
+attestation:
+  enabled: true
+  schedule: "0 */6 * * *"    # check every 6 hours
+  vectorDbPath: "/opt/app-root/src/anythingllm/storage/lancedb"
+```
+
+### How It Works
+
+1. **Attestation** (post-install hook): After documents are seeded, a Job computes
+   SHA-512 of all LanceDB files and stores the hash in a `vectordb-attestation` ConfigMap.
+2. **Integrity CronJob**: Runs on schedule, re-computes the hash, and compares it
+   against the baseline. Results (`PASS`/`FAIL`) are written to the ConfigMap.
+
+### Check Integrity Status
+
+```bash
+oc get configmap vectordb-attestation -n ${PROJECT} -o yaml
+```
+
+Key fields: `baseline-hash`, `last-check`, `last-result` (`PASS`/`FAIL`/`ERROR`).
 
 ## Troubleshooting
 
@@ -328,17 +537,60 @@ POD=$(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o jsonpa
 oc port-forward -n ${PROJECT} pod/${POD} 8080:8080
 ```
 
-### Cosign verification fails during install
+### Vector DB integrity check fails
 
 ```bash
-# Check the verification Job logs
-oc logs -n ${PROJECT} job/cosign-verify-model
+# Check CronJob logs
+oc logs -n ${PROJECT} job/$(oc get jobs -n ${PROJECT} -l app=vectordb-integrity --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)
 
-# Verify locally
-cosign verify --key cosign.pub <your-oci-model-ref>
+# View attestation state
+oc get configmap vectordb-attestation -n ${PROJECT} -o jsonpath='{.data}' | python3 -m json.tool
 ```
 
-Common causes: wrong public key, unsigned artifact, or registry authentication issues.
+If `last-result` is `FAIL`, the vector DB was modified after attestation. This could be
+a legitimate document update or an integrity violation. Re-attest after any intentional
+change by deleting and re-running the attestation Job.
+
+### Model validation init container fails
+
+```bash
+# Check the init container logs
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
+
+# Check the model-download Job
+oc logs -n ${PROJECT} job/model-download
+
+# Check the ModelValidation CR
+oc get modelvalidation -n ${PROJECT} -o yaml
+
+# Check the operator webhook logs
+oc logs -n model-validation-operator-system deployment/model-validation-controller-manager --tail=30
+
+# Verify the operator is running
+oc get pods -n model-validation-operator-system
+```
+
+Common causes: Model Validation Operator not installed, unsigned model, missing
+`model.sig`, wrong public key, wrong certificate identity/issuer (keyless mode),
+or model files modified after signing.
+
+### Operator webhook not injecting init container
+
+If the predictor pod starts without a `model-validation` init container:
+
+```bash
+# Verify the label is on the predictor pod
+oc get pods -n ${PROJECT} -l serving.kserve.io/inferenceservice --show-labels | grep validation
+
+# Verify the ModelValidation CR exists
+oc get modelvalidation -n ${PROJECT}
+
+# Check the namespace is not ignored
+oc get namespace ${PROJECT} -o jsonpath='{.metadata.labels}' | grep -o 'validation.ml.sigstore.dev/ignore' && echo "IGNORED" || echo "OK"
+
+# Check the webhook is registered
+oc get mutatingwebhookconfiguration | grep validation
+```
 
 ### Storage issues
 
@@ -354,9 +606,9 @@ Update `storageClassName` in [`helm/values.yaml`](helm/values.yaml) if needed.
 
 **Supply Chain Security:**
 
-- Sigstore cosign: [sigstore/cosign](https://github.com/sigstore/cosign)
+- Model Validation Operator: [sigstore/model-validation-operator](https://github.com/sigstore/model-validation-operator)
 - Model signing: [sigstore/model-transparency](https://github.com/sigstore/model-transparency)
-- ORAS (OCI Registry As Storage): [oras.land](https://oras.land)
+- Sigstore: [sigstore.dev](https://www.sigstore.dev)
 
 **Runtime & Infrastructure:**
 

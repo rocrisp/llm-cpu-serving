@@ -162,8 +162,14 @@ oc get storageclass
 - ✅ ServiceAccount (anythingllm-serviceaccount.yaml)
 - ✅ PVC (workbench-pvc.yaml)
 - ✅ Seed Job (init_job.yaml)
-- ✅ Cosign verification Job (cosign-verify-job.yaml, when `signing.enabled`)
-- ✅ Cosign public key Secret (cosign-pubkey-secret.yaml, when `signing.enabled`)
+- ✅ Model storage PVC (model-storage-pvc.yaml, pre-install hook, when `signing.enabled`)
+- ✅ Model download Job (model-download-job.yaml, pre-install hook, when `signing.enabled`)
+- ✅ ModelValidation CR (model-validation-cr.yaml, when `signing.enabled`)
+- ✅ Signing public key Secret (signing-pubkey-secret.yaml, when `signing.enabled` + `publicKeyData`)
+- ✅ Vector DB attestation Job (vectordb-attestation-job.yaml, when `attestation.enabled`)
+- ✅ Vector DB integrity CronJob (vectordb-integrity-cronjob.yaml, when `attestation.enabled`)
+- ✅ Attestation ConfigMap (vectordb-attestation-configmap.yaml, when `attestation.enabled`)
+- ✅ Integrity RBAC (vectordb-attestation-rbac.yaml, when `attestation.enabled`)
 
 ### Auto-Created by Controllers
 - ❌ Services (owned by Notebook controller)
@@ -222,8 +228,8 @@ This Helm deployment differs from manual workbench creation:
 To switch models, update `helm/values.yaml`:
 ```yaml
 model:
-  storageUri: "hf://facebook/opt-350m"
-  name: "opt-350m"
+  storageUri: "hf://Qwen/Qwen2.5-1.5B-Instruct"
+  name: "qwen25-15b"
   maxModelLen: 2048
 ```
 
@@ -243,69 +249,154 @@ helm upgrade hr-assistant helm/ -n hr-assistant
    ```
 3. Upgrade deployment
 
-## Model Signing with Cosign (Optional)
+## Model Signing and Verification (Optional)
 
-When `signing.enabled: true` in `helm/values.yaml`, the chart runs a
-[Sigstore cosign](https://github.com/sigstore/cosign) verification Job as a Helm
-pre-install hook. The model must be stored as a signed OCI artifact instead of
-loaded directly from HuggingFace.
+When `signing.enabled: true` in `helm/values.yaml`, the chart integrates with
+the [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+to enforce cryptographic model verification before the predictor pod serves traffic.
+
+### How It Works
+
+1. **model-download Job** (pre-install hook) — copies signed model from an OCI
+   image (or downloads a `.tar.gz` archive) onto a PVC
+2. **ModelValidation CR** — tells the operator how to verify the model
+3. **Operator webhook** — intercepts the predictor pod (via the
+   `validation.ml.sigstore.dev/ml` label) and injects a `model-validation`
+   init container
+4. **Init container** — verifies the signature; if it fails, the pod stays
+   in `Init:Error` and never serves traffic
 
 ### Prerequisites
 
-- [cosign v3+](https://github.com/sigstore/cosign#installation)
-- [oras](https://oras.land) (for pushing model files to OCI registries)
-- Write access to an OCI registry (e.g., quay.io)
+- [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+  installed on the cluster:
+  ```bash
+  oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
+  ```
+- [model-signing](https://github.com/sigstore/model-transparency) Python package
+  (for signing models locally): `pip install model-signing`
 
-### Workflow
+### Signing Workflow
 
-1. **Push model to OCI registry:**
-   ```bash
-   ./scripts/sign-model.sh push ./model-files quay.io/your-org/qwen25-05b:v1
-   ```
+```bash
+# 1. Download the model
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
 
-2. **Sign the artifact:**
-   ```bash
-   ./scripts/sign-model.sh sign quay.io/your-org/qwen25-05b:v1
-   ```
+# 2. Generate a signing key pair
+openssl ecparam -genkey -name prime256v1 -noout -out signing-key.pem
+openssl ec -in signing-key.pem -pubout -out signing-key.pub
 
-3. **Encode public key and update values.yaml:**
-   ```bash
-   ./scripts/sign-model.sh encode-pubkey
-   ```
-   Then set in `helm/values.yaml`:
-   ```yaml
-   model:
-     storageUri: "oci://quay.io/your-org/qwen25-05b:v1"
+# 3. Sign the model
+python3 -m model_signing sign key \
+    --private_key signing-key.pem \
+    --signature ./model-files/model.sig \
+    --ignore-git-paths ./model-files
 
-   signing:
-     enabled: true
-     publicKey: "<base64-encoded cosign.pub>"
-   ```
+# 4. Package as OCI image
+cat > Containerfile <<EOF
+FROM busybox:latest
+COPY model-files/ /model/
+EOF
+podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
+podman push quay.io/yourorg/signed-model:v1
+```
 
-4. **Deploy as normal** — the verification Job runs automatically before resources
-   are created. If the signature is invalid, Helm aborts the install.
+### Configuration
 
-### Key-Based vs Keyless
+```yaml
+signing:
+  enabled: true
+  modelImage: "quay.io/yourorg/signed-model:v1"
+  signaturePath: "model.sig"
+  storageSize: "2Gi"
+  ignoreGitPaths: true
+  publicKeyData: |
+    -----BEGIN PUBLIC KEY-----
+    <paste contents of signing-key.pub>
+    -----END PUBLIC KEY-----
+```
 
-- **Key-based:** Generate a keypair with `./scripts/sign-model.sh generate-keys`.
-  Store `cosign.pub` in `signing.publicKey`. Best for air-gapped environments.
-- **Keyless (OIDC):** Leave `publicKey` empty, set `certificateIdentity` and
-  `certificateOidcIssuer`. Best for CI/CD pipelines with OIDC providers
-  (GitHub, Google, Microsoft).
+### Verification Methods
+
+- **Key-based:** Set `publicKeyData` with the PEM-encoded public key.
+  Best for air-gapped environments.
+- **Keyless (OIDC):** Set `certificateIdentity` and `certificateOidcIssuer`.
+  Best for CI/CD pipelines with OIDC providers (GitHub, Google).
 
 ### Troubleshooting
 
-If `helm install` fails with a cosign verification error:
-
 ```bash
-oc logs -n ${PROJECT} job/cosign-verify-model
+# Check the init container verification
+oc logs -n hr-assistant -l serving.kserve.io/inferenceservice -c model-validation
+
+# Check the download Job
+oc logs -n hr-assistant job/model-download
+
+# Check operator logs
+oc logs -n model-validation-operator-system deployment/model-validation-controller-manager --tail=20
 ```
 
 Common causes:
-- Model artifact was not signed
-- Wrong public key in `signing.publicKey`
-- Registry authentication not configured in the cluster
-- `model.storageUri` still uses `hf://` instead of `oci://`
+- Model Validation Operator not installed
+- Model files not signed (missing `model.sig`)
+- Wrong public key or certificate identity/issuer
+- Model files modified after signing
+
+## Vector DB Attestation and Integrity (Optional)
+
+When `attestation.enabled: true` in `helm/values.yaml`, the chart provides tamper
+detection for the LanceDB vector database used by AnythingLLM.
+
+### How It Works
+
+1. **Post-install attestation Job** (`vectordb-attest`):
+   - Waits for `anythingllm-0` to be ready and documents to be seeded
+   - Execs into the pod, computes SHA-512 of all LanceDB files
+   - Stores the baseline hash and SLSA-style provenance in a ConfigMap
+
+2. **Periodic integrity CronJob** (`vectordb-integrity-check`):
+   - Runs on the configured schedule (default: every 6 hours)
+   - Re-computes the hash and compares against the baseline
+   - Writes `PASS` / `FAIL` / `ERROR` to the ConfigMap
+
+### Configuration
+
+```yaml
+attestation:
+  enabled: true
+  schedule: "0 */6 * * *"
+  vectorDbPath: "/opt/app-root/src/anythingllm/storage/lancedb"
+```
+
+### RBAC
+
+The feature creates a dedicated `vectordb-integrity` ServiceAccount with minimal
+permissions: pod get/list, pod/exec create (for `anythingllm-0` only), and
+configmap patch (for `vectordb-attestation` only).
+
+### Monitoring
+
+```bash
+# Check attestation status
+oc get configmap vectordb-attestation -n hr-assistant -o yaml
+
+# Check CronJob history
+oc get jobs -n hr-assistant -l app=vectordb-integrity
+
+# View latest integrity check logs
+oc logs -n hr-assistant job/$(oc get jobs -n hr-assistant --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+```
+
+### Re-Attestation
+
+After intentionally updating documents, re-run the attestation to set a new baseline:
+
+```bash
+oc delete job vectordb-attest -n hr-assistant
+oc create job vectordb-attest-manual --from=cronjob/vectordb-integrity-check -n hr-assistant
+```
+
+Or redeploy with Helm to trigger the post-install hook.
 
 ## Summary
 

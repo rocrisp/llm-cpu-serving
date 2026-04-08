@@ -1,0 +1,87 @@
+{{- if .Values.attestation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vectordb-integrity-check
+  labels:
+    app: vectordb-integrity
+spec:
+  schedule: {{ .Values.attestation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: vectordb-integrity
+          containers:
+            - name: integrity-check
+              image: bitnami/kubectl:latest
+              command: ["/bin/sh", "-c"]
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: VECTOR_DB_PATH
+                  value: {{ .Values.attestation.vectorDbPath | quote }}
+              args:
+                - |
+                  set -eu
+
+                  echo "=== Vector DB Integrity Check ==="
+                  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+                  echo "Check time: ${TIMESTAMP}"
+
+                  BASELINE=$(kubectl get configmap vectordb-attestation -n "${NAMESPACE}" -o jsonpath='{.data.baseline-hash}' 2>/dev/null || echo "")
+                  ATTESTED_AT=$(kubectl get configmap vectordb-attestation -n "${NAMESPACE}" -o jsonpath='{.data.attested-at}' 2>/dev/null || echo "unknown")
+
+                  if [ -z "$BASELINE" ] || [ "$BASELINE" = "none" ]; then
+                    echo "WARNING: No baseline hash found. Run attestation first."
+                    echo "Status: SKIPPED (no baseline)"
+                    exit 0
+                  fi
+
+                  echo "Baseline hash (attested ${ATTESTED_AT}): ${BASELINE}"
+
+                  READY=$(kubectl get pod anythingllm-0 -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+                  if [ "$READY" != "true" ]; then
+                    echo "WARNING: anythingllm-0 is not ready. Skipping check."
+                    exit 0
+                  fi
+
+                  echo "Computing current SHA-512 of ${VECTOR_DB_PATH}..."
+                  CURRENT=$(kubectl exec anythingllm-0 -n "${NAMESPACE}" -c anythingllm -- \
+                    sh -c "find ${VECTOR_DB_PATH} -type f 2>/dev/null | sort | xargs sha512sum 2>/dev/null | sha512sum | cut -d' ' -f1" \
+                    2>/dev/null || echo "HASH_FAILED")
+
+                  echo "Current hash: ${CURRENT}"
+
+                  if [ "$CURRENT" = "HASH_FAILED" ] || [ -z "$CURRENT" ]; then
+                    echo "ERROR: Failed to compute current hash."
+                    echo "Status: ERROR"
+                    kubectl patch configmap vectordb-attestation -n "${NAMESPACE}" \
+                      --type merge \
+                      -p "{\"data\":{\"last-check\":\"${TIMESTAMP}\",\"last-result\":\"ERROR\"}}"
+                    exit 1
+                  fi
+
+                  if [ "$CURRENT" = "$BASELINE" ]; then
+                    echo "PASS: Vector DB integrity verified."
+                    kubectl patch configmap vectordb-attestation -n "${NAMESPACE}" \
+                      --type merge \
+                      -p "{\"data\":{\"last-check\":\"${TIMESTAMP}\",\"last-result\":\"PASS\"}}"
+                  else
+                    echo "FAIL: Vector DB has been modified since attestation!"
+                    echo "  Expected: ${BASELINE}"
+                    echo "  Got:      ${CURRENT}"
+                    kubectl patch configmap vectordb-attestation -n "${NAMESPACE}" \
+                      --type merge \
+                      -p "{\"data\":{\"last-check\":\"${TIMESTAMP}\",\"last-result\":\"FAIL\",\"last-fail-hash\":\"${CURRENT}\"}}"
+                    exit 1
+                  fi
+{{- end }}

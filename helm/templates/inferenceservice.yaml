@@ -13,6 +13,10 @@ spec:
   predictor:
     maxReplicas: 1
     minReplicas: 1
+    {{- if .Values.signing.enabled }}
+    labels:
+      validation.ml.sigstore.dev/ml: {{ .Values.model.name }}-validation
+    {{- end }}
     model:
       modelFormat:
         name: vLLM

@@ -72,27 +72,28 @@ For an internal HR assistant where someone asks a question every few minutes, th
 
 ---
 
-## Part 2: Meet OPT-125m - Your AI Brain
+## Part 2: Meet Qwen2.5-0.5B-Instruct - Your AI Brain
 
 ### What Model Are We Using?
 
-We're using **OPT-125m**, a language model created by Meta (Facebook). The "125m" means it has 125 million parameters.
+We're using **Qwen2.5-0.5B-Instruct**, a language model created by Alibaba's Qwen team. The "0.5B" means it has 500 million parameters. The "Instruct" suffix means it has been fine-tuned to follow instructions and hold conversations.
 
 **What are parameters?**
 Think of parameters as the model's "knowledge neurons." More parameters = more knowledge and capability, but also more computing power needed.
 
 **Size comparison:**
-- **OPT-125m:** 125 million parameters (what we're using)
-- **GPT-3:** 175 billion parameters (1,400x larger!)
-- **ChatGPT-4:** Estimated 1.7 trillion parameters (13,600x larger!)
+- **Qwen2.5-0.5B:** 500 million parameters (what we're using)
+- **GPT-3:** 175 billion parameters (350x larger!)
+- **ChatGPT-4:** Estimated 1.7 trillion parameters (3,400x larger!)
 
 **Why such a small model?**
 
-Because for focused tasks (like answering HR questions from a specific set of documents), you don't need the world's most powerful AI. OPT-125m is:
+Because for focused tasks (like answering HR questions from a specific set of documents), you don't need the world's most powerful AI. Qwen2.5-0.5B-Instruct is:
 - **Fast** on CPUs (2-3 tokens/second)
-- **Small** (~500MB on disk)
-- **Effective** for question-answering tasks
+- **Small** (~1GB on disk)
+- **Effective** for question-answering and instruction-following tasks
 - **Free** and open-source
+- **Has a built-in chat template** (no external template needed)
 
 It's like using a calculator instead of a supercomputer to add 2+2. The calculator is perfectly adequate for the task.
 
@@ -144,7 +145,7 @@ Let's break down all the technologies involved, starting from the simplest conce
 
 **RAG** stands for **Retrieval-Augmented Generation**. This is a crucial concept that makes your AI assistant actually useful for specific tasks.
 
-**The problem:** OPT-125m was trained on general internet text. It doesn't know about *your* company's HR policies, *your* procedures, or *your* documents.
+**The problem:** Qwen2.5-0.5B was trained on general internet text. It doesn't know about *your* company's HR policies, *your* procedures, or *your* documents.
 
 **The solution:** RAG combines two steps:
 
@@ -256,10 +257,10 @@ Let's trace what happens when you ask: *"What do I need to know about giving an 
 ┌─────────────────────────────────────────────────────────────────┐
 │         6. SEND REQUEST TO VLLM INFERENCE SERVICE               │
 │                                                                 │
-│  POST http://opt-125m-cpu-predictor:8080/v1/chat/completions   │
+│  POST http://qwen25-05b-cpu-predictor:8080/v1/chat/completions │
 │                                                                 │
 │  {                                                              │
-│    "model": "opt-125m",                                         │
+│    "model": "qwen25-05b",                                         │
 │    "messages": [                                                │
 │      {"role": "system", "content": "You are an HR..."},         │
 │      {"role": "user", "content": "What about..."}               │
@@ -284,7 +285,7 @@ Let's trace what happens when you ask: *"What do I need to know about giving an 
 ┌─────────────────────────────────────────────────────────────────┐
 │                 8. MODEL GENERATES RESPONSE                     │
 │                                                                 │
-│  OPT-125m processes the prompt token by token on CPU:           │
+│  Qwen2.5-0.5B processes the prompt token by token on CPU:           │
 │                                                                 │
 │  Token 1: "When" (0.5 seconds)                                  │
 │  Token 2: "considering" (1.0 seconds)                           │
@@ -349,7 +350,7 @@ For those curious about the technical implementation:
 
 1. **Namespace:** `hr-assistant` - Isolated environment for all components
 2. **StatefulSet:** `anythingllm` - Runs the chat interface with persistent storage
-3. **Deployment:** `opt-125m-cpu-predictor` - Runs the vLLM inference engine
+3. **Deployment:** `qwen25-05b-cpu-predictor` - Runs the vLLM inference engine
 4. **Services:** Network endpoints for communication between components
 5. **ConfigMaps:** Configuration files (chat template, trusted CAs)
 6. **Secrets:** Sensitive configuration (API keys, OAuth tokens)
@@ -358,11 +359,12 @@ For those curious about the technical implementation:
 **Container Architecture:**
 
 The `anythingllm` pod has 3 containers:
-- **oauth-proxy:** Handles authentication
+- **kube-rbac-proxy:** Handles authentication (auto-injected by OpenShift AI controller)
 - **anythingllm:** Main chat interface
 - **anythingllm-automation:** Database management sidecar
 
-The `opt-125m-cpu-predictor` pod has 2 containers:
+The `qwen25-05b-cpu-predictor` pod has 2-3 containers:
+- **model-validation (init container):** Verifies model signature (when signing enabled)
 - **agent:** KServe agent for model lifecycle
 - **kserve-container:** vLLM runtime with the model
 
@@ -384,7 +386,7 @@ KServe is a Kubernetes-native platform for serving ML models. It handles:
 
 **2. Why Headless Service?**
 
-The service `opt-125m-cpu-predictor` is "headless" (ClusterIP: None), which means it connects directly to pod IPs rather than using a load balancer.
+The service `qwen25-05b-cpu-predictor` is "headless" (ClusterIP: None), which means it connects directly to pod IPs rather than using a load balancer.
 
 **Benefit:** With a single pod, this is more efficient and reduces latency.
 
@@ -396,7 +398,7 @@ The chat template is mounted as a ConfigMap volume so you can update it without 
 
 **4. Why Separate Embedding and LLM?**
 
-AnythingLLM uses a small local embedding model (all-MiniLM-L6-v2) for document search, separate from the OPT-125m model for generation.
+AnythingLLM uses a small local embedding model (all-MiniLM-L6-v2) for document search, separate from the Qwen2.5-0.5B model for generation.
 
 **Benefit:** Embeddings are fast and can run locally. You don't need to call the LLM for every search.
 
@@ -518,7 +520,7 @@ The `-w` flag means "watch" - the command will continuously update.
 NAME                                      READY   STATUS              RESTARTS   AGE
 anythingllm-0                             0/2     ContainerCreating   0          10s
 anythingllm-seed-xxxxx                    0/1     ContainerCreating   0          10s
-opt-125m-cpu-predictor-xxxxxxxxxx-xxxxx   0/2     Init:0/1            0          10s
+qwen25-05b-cpu-predictor-xxxxxxxxx-xxxxx  0/2     Init:0/1            0          10s
 ```
 
 **Status explanations:**
@@ -541,7 +543,7 @@ opt-125m-cpu-predictor-xxxxxxxxxx-xxxxx   0/2     Init:0/1            0         
 NAME                                      READY   STATUS      RESTARTS   AGE
 anythingllm-0                             2/2     Running     0          3m
 anythingllm-seed-xxxxx                    0/1     Completed   0          3m
-opt-125m-cpu-predictor-xxxxxxxxxx-xxxxx   2/2     Running     0          3m
+qwen25-05b-cpu-predictor-xxxxxxxxx-xxxxx  2/2     Running     0          3m
 ```
 
 Press `Ctrl+C` to stop watching.
@@ -656,8 +658,8 @@ helm/
 
 ```yaml
 model:
-  storageUri: "hf://facebook/opt-125m"  # Where to get the model
-  name: "opt-125m"                       # Model identifier
+  storageUri: "hf://Qwen/Qwen2.5-0.5B-Instruct"  # Where to get the model
+  name: "qwen25-05b"                              # Model identifier
   maxModelLen: 2048                      # Maximum context length
 
 images:
@@ -693,13 +695,13 @@ The ServingRuntime defines how vLLM should run:
 containers:
   - args:
       - --model
-      - facebook/opt-125m        # Model to load
+      - Qwen/Qwen2.5-0.5B-Instruct  # Model to load
       - --port
       - "8080"                   # API port
       - --max-model-len
       - "2048"                   # Context length
       - --served-model-name
-      - opt-125m                 # Name for API
+      - qwen25-05b               # Name for API
       - --dtype
       - float32                  # Use 32-bit floats (CPU optimized)
       - --chat-template
@@ -755,11 +757,96 @@ You are an HR assistant.
 What about raises?
 ```
 
-This format is what OPT-125m expects.
+This is a simplified example; Qwen2.5-0.5B-Instruct has a built-in chat template that handles this formatting automatically.
 
 ---
 
-## Part 8: Customization and Advanced Topics
+## Part 8: Model Signing and Verification
+
+### Why Sign Your Models?
+
+When you deploy an AI model in production, how do you know the model hasn't been tampered with? Someone could modify the model weights to introduce backdoors, bias, or malicious behavior. This is especially important in regulated industries like banking.
+
+**Model signing** uses cryptography to create a digital "seal" on your model. If anyone modifies the model after signing, the seal breaks and verification fails.
+
+### How It Works in This Project
+
+This project integrates with the [Model Validation Operator](https://github.com/sigstore/model-validation-operator) from Sigstore to enforce model verification at deployment time.
+
+```
+Developer signs model → Packages as OCI image → Deploys with Helm
+                                                       │
+                                    ┌──────────────────┘
+                                    ▼
+                         ┌─────────────────────┐
+                         │  model-download Job  │
+                         │  Copies model to PVC │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────────────────┐
+                         │  Model Validation Operator       │
+                         │  Injects init container into pod │
+                         └──────────┬──────────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────────────┐
+                         │  Init container verifies     │
+                         │  signature before pod starts │
+                         └──────────┬──────────────────┘
+                                    │
+                            ┌───────┴───────┐
+                            │               │
+                        PASS ✓          FAIL ✗
+                            │               │
+                      Pod starts      Pod blocked
+                      and serves      (Init:Error)
+```
+
+### Enabling Model Signing
+
+1. **Generate a signing key pair:**
+   ```bash
+   ./scripts/sign-model.sh keygen
+   ```
+
+2. **Sign your model:**
+   ```bash
+   ./scripts/sign-model.sh sign ./model-files --key signing-key.pem
+   ```
+
+3. **Package as OCI image and push:**
+   ```bash
+   podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
+   podman push quay.io/yourorg/signed-model:v1
+   ```
+
+4. **Configure `values.yaml`:**
+   ```yaml
+   signing:
+     enabled: true
+     modelImage: "quay.io/yourorg/signed-model:v1"
+     publicKeyData: |
+       -----BEGIN PUBLIC KEY-----
+       <your public key>
+       -----END PUBLIC KEY-----
+   ```
+
+5. **Deploy** — the operator automatically verifies the model before the pod can serve traffic.
+
+### What Happens If Verification Fails?
+
+The predictor pod stays in `Init:Error` state and never starts serving. You can check the logs:
+
+```bash
+oc logs -l serving.kserve.io/inferenceservice -c model-validation -n hr-assistant
+```
+
+This prevents tampered models from ever being served to users.
+
+---
+
+## Part 9: Customization and Advanced Topics
 
 ### Uploading Your Own Documents
 
@@ -794,8 +881,8 @@ Want to try a different model? Here's how:
 1. **Edit values.yaml:**
    ```yaml
    model:
-     storageUri: "hf://facebook/opt-350m"  # Larger model
-     name: "opt-350m"
+     storageUri: "hf://Qwen/Qwen2.5-1.5B-Instruct"  # Larger model
+     name: "qwen25-15b"
      maxModelLen: 2048
    ```
 
@@ -810,10 +897,10 @@ Want to try a different model? Here's how:
 
 | Model | Parameters | Speed | Quality | Use Case |
 |-------|-----------|-------|---------|----------|
-| facebook/opt-125m | 125M | Fastest | Good | Quick answers, demos |
-| facebook/opt-350m | 350M | Fast | Better | Production use |
-| facebook/opt-1.3b | 1.3B | Moderate | Best | Complex questions |
-| TinyLlama/TinyLlama-1.1B-Chat-v1.0 | 1.1B | Moderate | Good | General chat |
+| Qwen/Qwen2.5-0.5B-Instruct | 0.5B | Fastest | Good | Quick answers, demos |
+| Qwen/Qwen2.5-1.5B-Instruct | 1.5B | Fast | Better | Production use |
+| Qwen/Qwen2.5-3B-Instruct | 3B | Moderate | Best | Complex questions |
+| TinyLlama/TinyLlama-1.1B-Chat-v1.0 | 1.1B | Fast | Good | General chat |
 
 ### Adjusting Resources
 
@@ -845,7 +932,7 @@ If responses are too slow or you have more CPU available:
 
 **Check vLLM logs:**
 ```bash
-oc logs -n ${PROJECT} -l app=isvc.opt-125m-cpu-predictor -c kserve-container
+oc logs -n ${PROJECT} -l app=isvc.qwen25-05b-cpu-predictor -c kserve-container
 ```
 
 **Check AnythingLLM logs:**
@@ -855,7 +942,7 @@ oc logs -n ${PROJECT} anythingllm-0 -c anythingllm
 
 **Check if vLLM is responding:**
 ```bash
-oc port-forward -n ${PROJECT} svc/opt-125m-cpu-predictor 8080:80
+oc port-forward -n ${PROJECT} svc/qwen25-05b-cpu-predictor 8080:80
 
 # In another terminal:
 curl http://localhost:8080/health
@@ -881,7 +968,7 @@ curl http://localhost:8080/health
 
 ---
 
-## Part 9: Real-World Use Cases
+## Part 10: Real-World Use Cases
 
 ### Use Case 1: HR Policy Assistant (What We Built)
 
@@ -958,7 +1045,7 @@ Source: VPN_Troubleshooting_Guide.pdf, IT_Support_Runbook.pdf"
 
 ---
 
-## Part 10: Understanding the Costs
+## Part 11: Understanding the Costs
 
 Let's do a cost comparison to understand the value proposition.
 
@@ -1023,7 +1110,7 @@ For internal tools like HR assistants where:
 
 ---
 
-## Part 11: Security and Privacy Considerations
+## Part 12: Security and Privacy Considerations
 
 ### Data Privacy
 
@@ -1088,7 +1175,7 @@ With this deployment:
 
 ---
 
-## Part 12: What's Next?
+## Part 13: What's Next?
 
 ### Level Up Your Deployment
 
@@ -1135,7 +1222,7 @@ With this deployment:
 
 ---
 
-## Part 13: Frequently Asked Questions
+## Part 14: Frequently Asked Questions
 
 ### General Questions
 
@@ -1175,15 +1262,16 @@ But you should add:
 
 ### Technical Questions
 
-**Q: Why OPT-125m instead of larger models?**
+**Q: Why Qwen2.5-0.5B instead of larger models?**
 
 A:
 - **Speed:** Larger models are slower on CPU
-- **Memory:** 125M fits easily in 4-8GB
-- **Quality:** For RAG with good documents, smaller models work well
+- **Memory:** 0.5B fits easily in 4-8GB
+- **Quality:** For RAG with good documents, smaller instruction-tuned models work well
+- **Built-in chat template:** No external template configuration needed
 - **Cost:** Less compute = lower costs
 
-You can easily switch to larger models if needed.
+You can easily switch to larger models (Qwen2.5-1.5B, Qwen2.5-3B) if needed.
 
 **Q: Can I fine-tune the model on my data?**
 
@@ -1241,7 +1329,7 @@ A: Key things to backup:
 
 Solutions:
 1. **Increase CPU allocation** in `values.yaml`
-2. **Switch to a smaller model** (opt-125m is already small)
+2. **Switch to a smaller model** (Qwen2.5-0.5B is already small)
 3. **Reduce max_tokens** in responses
 4. **Use faster hardware** (newer Intel CPUs with AVX512)
 
@@ -1262,7 +1350,7 @@ This was a common issue we fixed. Ensure:
 
 If still broken:
 ```bash
-kubectl logs -n ${PROJECT} -l app=isvc.opt-125m-cpu-predictor
+oc logs -n ${PROJECT} -l app=isvc.qwen25-05b-cpu-predictor
 ```
 
 **Q: Pod won't start - ImagePullBackOff**
@@ -1329,7 +1417,7 @@ The future of AI isn't just large corporations with massive GPU clusters. It's a
 oc get pods -n hr-assistant
 
 # View vLLM logs
-oc logs -l app=isvc.opt-125m-cpu-predictor -c kserve-container -n hr-assistant
+oc logs -l app=isvc.qwen25-05b-cpu-predictor -c kserve-container -n hr-assistant
 
 # View AnythingLLM logs
 oc logs anythingllm-0 -c anythingllm -n hr-assistant
@@ -1341,7 +1429,7 @@ oc delete pod anythingllm-0 -n hr-assistant  # Auto-recreates
 helm upgrade hr-assistant helm/ --namespace hr-assistant
 
 # Test API directly
-oc port-forward svc/opt-125m-cpu-predictor 8080:80 -n hr-assistant
+oc port-forward svc/qwen25-05b-cpu-predictor 8080:80 -n hr-assistant
 curl http://localhost:8080/v1/models
 
 # Delete everything
@@ -1355,7 +1443,7 @@ helm uninstall hr-assistant --namespace hr-assistant
 - **OpenShift AI:** https://www.redhat.com/en/technologies/cloud-computing/openshift/openshift-ai
 - **vLLM:** https://docs.vllm.ai/
 - **AnythingLLM:** https://github.com/Mintplex-Labs/anything-llm
-- **OPT Models:** https://huggingface.co/facebook/opt-125m
+- **Qwen Models:** https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct
 
 ### Glossary
 

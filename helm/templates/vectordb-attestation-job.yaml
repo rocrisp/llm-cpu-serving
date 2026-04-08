@@ -1,0 +1,90 @@
+{{- if .Values.attestation.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vectordb-attest
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: vectordb-integrity
+      containers:
+        - name: attest
+          image: bitnami/kubectl:latest
+          command: ["/bin/sh", "-c"]
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: VECTOR_DB_PATH
+              value: {{ .Values.attestation.vectorDbPath | quote }}
+            - name: SEED_URLS
+              value: {{ join "," .Values.aiLifecoach.seedUrls | quote }}
+          args:
+            - |
+              set -eu
+
+              echo "=== Vector DB Attestation ==="
+              echo "Waiting for anythingllm-0 to be ready..."
+
+              ATTEMPT=1
+              while [ $ATTEMPT -le 120 ]; do
+                STATUS=$(kubectl get pod anythingllm-0 -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+                READY=$(kubectl get pod anythingllm-0 -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+                if [ "$STATUS" = "Running" ] && [ "$READY" = "true" ]; then
+                  echo "anythingllm-0 is ready (attempt ${ATTEMPT})"
+                  break
+                fi
+                echo "Waiting... status=${STATUS} ready=${READY} (attempt ${ATTEMPT}/120)"
+                ATTEMPT=$((ATTEMPT + 1))
+                sleep 5
+              done
+
+              echo "Waiting 60s for seed job to finish ingesting documents..."
+              sleep 60
+
+              echo "Computing SHA-512 of vector DB at ${VECTOR_DB_PATH}..."
+              HASH=$(kubectl exec anythingllm-0 -n "${NAMESPACE}" -c anythingllm -- \
+                sh -c "find ${VECTOR_DB_PATH} -type f 2>/dev/null | sort | xargs sha512sum 2>/dev/null | sha512sum | cut -d' ' -f1" \
+                2>/dev/null || echo "HASH_FAILED")
+
+              if [ "$HASH" = "HASH_FAILED" ] || [ -z "$HASH" ]; then
+                echo "ERROR: Failed to compute vector DB hash."
+                echo "The vector DB may not exist yet. Storing empty baseline."
+                HASH="none"
+              fi
+
+              TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+              echo "Baseline hash: ${HASH}"
+              echo "Timestamp:     ${TIMESTAMP}"
+              echo "Seed URLs:     ${SEED_URLS}"
+
+              PROVENANCE=$(cat <<PROV
+              {
+                "buildType": "vectordb-attestation/v1",
+                "subject": {
+                  "path": "${VECTOR_DB_PATH}",
+                  "digest": { "sha512": "${HASH}" }
+                },
+                "predicate": {
+                  "seedUrls": "${SEED_URLS}",
+                  "attestedAt": "${TIMESTAMP}"
+                }
+              }
+              PROV
+              )
+
+              kubectl patch configmap vectordb-attestation -n "${NAMESPACE}" \
+                --type merge \
+                -p "{\"data\":{\"baseline-hash\":\"${HASH}\",\"attested-at\":\"${TIMESTAMP}\",\"seed-urls\":\"${SEED_URLS}\",\"provenance\":$(echo "$PROVENANCE" | tr -d '\n' | sed 's/"/\\"/g; s/^/"/; s/$/"/' ),\"status\":\"attested\"}}"
+
+              echo "=== Attestation stored in ConfigMap vectordb-attestation ==="
+{{- end }}

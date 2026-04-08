@@ -1,27 +1,33 @@
 #!/bin/bash
-# Sign and verify an OCI model artifact with cosign.
+# Sign and verify model files using sigstore model-signing.
+#
+# The Helm chart integrates with the Model Validation Operator
+# (https://github.com/sigstore/model-validation-operator) to enforce
+# cryptographic model verification via an init container injected by webhook.
+# This script produces the signed model that the operator validates.
 #
 # Prerequisites:
-#   - cosign v3+   (https://github.com/sigstore/cosign)
-#   - oras         (https://oras.land) — only needed for the initial push
-#   - Authenticated to your OCI registry (e.g. podman login / docker login)
+#   - pip install model-signing   (https://github.com/sigstore/model-transparency)
+#   - For key-based signing: openssl (for key generation)
+#   - For archive/OCI packaging: tar, podman or docker
 #
 # Usage:
 #   ./scripts/sign-model.sh <action> [options]
 #
 # Actions:
-#   generate-keys             Generate a cosign keypair (cosign.key / cosign.pub)
-#   push   <model-dir> <ref>  Push model files to an OCI registry
-#   sign   <ref>              Sign an OCI artifact (key-based or keyless)
-#   verify <ref>              Verify an OCI artifact signature
-#   encode-pubkey             Base64-encode cosign.pub for helm/values.yaml
+#   keygen                        Generate an EC P-256 signing key pair
+#   sign     <model-dir> [--key <private-key>]
+#                                 Sign model files (produces model.sig)
+#   verify   <model-dir> [--key <public-key>]
+#                                 Verify model signature
+#   archive  <model-dir> <output> Create a flat tar.gz of model + signature
+#   help                          Show this help
 #
 # Examples:
-#   ./scripts/sign-model.sh generate-keys
-#   ./scripts/sign-model.sh push ./model-files quay.io/myorg/qwen25-05b:v1
-#   ./scripts/sign-model.sh sign quay.io/myorg/qwen25-05b:v1
-#   ./scripts/sign-model.sh verify quay.io/myorg/qwen25-05b:v1
-#   ./scripts/sign-model.sh encode-pubkey
+#   ./scripts/sign-model.sh keygen
+#   ./scripts/sign-model.sh sign ./model-files --key signing-key.pem
+#   ./scripts/sign-model.sh verify ./model-files --key signing-key.pub
+#   ./scripts/sign-model.sh archive ./model-files signed-model.tar.gz
 
 set -euo pipefail
 
@@ -43,93 +49,159 @@ shift || true
 
 case "$ACTION" in
 
-generate-keys)
-    require_cmd cosign "https://github.com/sigstore/cosign#installation"
-    info "Generating cosign keypair..."
-    cosign generate-key-pair
-    info "Created cosign.key (private) and cosign.pub (public)"
-    info "Keep cosign.key secret. Distribute cosign.pub for verification."
+keygen)
+    require_cmd openssl "https://www.openssl.org"
+    KEY_NAME="${1:-signing-key}"
+    info "Generating EC P-256 key pair..."
+    openssl ecparam -genkey -name prime256v1 -noout -out "${KEY_NAME}.pem"
+    openssl ec -in "${KEY_NAME}.pem" -pubout -out "${KEY_NAME}.pub"
+    info "Private key: ${KEY_NAME}.pem"
+    info "Public key:  ${KEY_NAME}.pub"
     echo ""
-    info "To add the public key to values.yaml, run:"
-    echo "  ./scripts/sign-model.sh encode-pubkey"
-    ;;
-
-push)
-    require_cmd oras "https://oras.land/docs/installation"
-    MODEL_DIR="${1:-}"
-    OCI_REF="${2:-}"
-    [ -z "$MODEL_DIR" ] && error "Usage: $0 push <model-dir> <oci-ref>"
-    [ -z "$OCI_REF" ]   && error "Usage: $0 push <model-dir> <oci-ref>"
-    [ -d "$MODEL_DIR" ] || error "Directory not found: $MODEL_DIR"
-
-    info "Pushing model files from '$MODEL_DIR' to '$OCI_REF'..."
-    oras push "$OCI_REF" "$MODEL_DIR/:application/vnd.oci.image.layer.v1.tar+gzip"
-    info "Model pushed to $OCI_REF"
-    echo ""
-    info "Next step — sign the artifact:"
-    echo "  ./scripts/sign-model.sh sign $OCI_REF"
+    info "Next steps:"
+    echo "  1. Sign:    $0 sign ./model-files --key ${KEY_NAME}.pem"
+    echo "  2. Add the public key to values.yaml:"
+    echo "     signing:"
+    echo "       publicKeyData: |"
+    sed 's/^/         /' "${KEY_NAME}.pub"
     ;;
 
 sign)
-    require_cmd cosign "https://github.com/sigstore/cosign#installation"
-    OCI_REF="${1:-}"
-    [ -z "$OCI_REF" ] && error "Usage: $0 sign <oci-ref>"
+    require_cmd python3 "https://www.python.org"
+    MODEL_DIR=""
+    PRIVATE_KEY=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --key) PRIVATE_KEY="$2"; shift 2 ;;
+            *)     MODEL_DIR="$1"; shift ;;
+        esac
+    done
+    [ -z "$MODEL_DIR" ] && error "Usage: $0 sign <model-dir> [--key <private-key>]"
+    [ -d "$MODEL_DIR" ] || error "Directory not found: $MODEL_DIR"
 
-    if [ -f cosign.key ]; then
-        info "Signing '$OCI_REF' with cosign.key (key-based)..."
-        cosign sign --key cosign.key "$OCI_REF"
-    else
-        info "No cosign.key found — using keyless signing (OIDC)..."
-        info "Your browser will open for authentication."
-        cosign sign "$OCI_REF"
+    if ! python3 -c "import model_signing" 2>/dev/null; then
+        error "model-signing not installed. Run: pip install model-signing"
     fi
-    info "Artifact signed successfully."
+
+    SIG_PATH="${MODEL_DIR}/model.sig"
+    if [ -n "$PRIVATE_KEY" ]; then
+        [ -f "$PRIVATE_KEY" ] || error "Private key not found: $PRIVATE_KEY"
+        info "Signing model at '$MODEL_DIR' with key '$PRIVATE_KEY'..."
+        python3 -m model_signing sign key \
+            --private_key "$PRIVATE_KEY" \
+            --signature "$SIG_PATH" \
+            --ignore-git-paths \
+            "$MODEL_DIR"
+    else
+        info "Signing model at '$MODEL_DIR' with Sigstore keyless (OIDC)..."
+        python3 -m model_signing sign sigstore \
+            --signature "$SIG_PATH" \
+            --ignore-git-paths \
+            "$MODEL_DIR"
+    fi
+    info "Signature written to $SIG_PATH"
+    echo ""
+    info "Next steps:"
+    echo "  1. Verify:  $0 verify $MODEL_DIR ${PRIVATE_KEY:+--key ${PRIVATE_KEY%.pem}.pub}"
+    echo "  2. Archive: $0 archive $MODEL_DIR signed-model.tar.gz"
     ;;
 
 verify)
-    require_cmd cosign "https://github.com/sigstore/cosign#installation"
-    OCI_REF="${1:-}"
-    [ -z "$OCI_REF" ] && error "Usage: $0 verify <oci-ref>"
+    require_cmd python3 "https://www.python.org"
+    MODEL_DIR=""
+    PUBLIC_KEY=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --key) PUBLIC_KEY="$2"; shift 2 ;;
+            *)     MODEL_DIR="$1"; shift ;;
+        esac
+    done
+    [ -z "$MODEL_DIR" ] && error "Usage: $0 verify <model-dir> [--key <public-key>]"
+    [ -d "$MODEL_DIR" ] || error "Directory not found: $MODEL_DIR"
 
-    if [ -f cosign.pub ]; then
-        info "Verifying '$OCI_REF' with cosign.pub (key-based)..."
-        cosign verify --key cosign.pub "$OCI_REF"
+    if ! python3 -c "import model_signing" 2>/dev/null; then
+        error "model-signing not installed. Run: pip install model-signing"
+    fi
+
+    SIG_PATH="${MODEL_DIR}/model.sig"
+    [ -f "$SIG_PATH" ] || error "No signature file at $SIG_PATH. Sign first: $0 sign $MODEL_DIR"
+
+    if [ -n "$PUBLIC_KEY" ]; then
+        [ -f "$PUBLIC_KEY" ] || error "Public key not found: $PUBLIC_KEY"
+        info "Verifying model at '$MODEL_DIR' with key '$PUBLIC_KEY'..."
+        python3 -m model_signing verify key \
+            --public_key "$PUBLIC_KEY" \
+            --signature "$SIG_PATH" \
+            --ignore-git-paths \
+            "$MODEL_DIR"
     else
-        CERT_ID="${COSIGN_CERTIFICATE_IDENTITY:-}"
-        CERT_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-}"
-        if [ -n "$CERT_ID" ] && [ -n "$CERT_ISSUER" ]; then
-            info "Verifying '$OCI_REF' with keyless identity..."
-            cosign verify \
-                --certificate-identity="$CERT_ID" \
-                --certificate-oidc-issuer="$CERT_ISSUER" \
-                "$OCI_REF"
-        else
-            error "No cosign.pub found and COSIGN_CERTIFICATE_IDENTITY / COSIGN_CERTIFICATE_OIDC_ISSUER not set."
-        fi
+        info "Verifying model at '$MODEL_DIR' with Sigstore keyless..."
+        python3 -m model_signing verify sigstore \
+            --signature "$SIG_PATH" \
+            --ignore-git-paths \
+            "$MODEL_DIR"
     fi
     info "Verification passed."
     ;;
 
-encode-pubkey)
-    [ -f cosign.pub ] || error "cosign.pub not found. Run: $0 generate-keys"
-    ENCODED=$(base64 < cosign.pub | tr -d '\n')
-    info "Base64-encoded public key:"
+archive)
+    MODEL_DIR="${1:-}"
+    OUTPUT="${2:-}"
+    [ -z "$MODEL_DIR" ] && error "Usage: $0 archive <model-dir> <output.tar.gz>"
+    [ -z "$OUTPUT" ]    && error "Usage: $0 archive <model-dir> <output.tar.gz>"
+    [ -d "$MODEL_DIR" ] || error "Directory not found: $MODEL_DIR"
+
+    SIG_PATH="${MODEL_DIR}/model.sig"
+    [ -f "$SIG_PATH" ] || error "No signature at $SIG_PATH. Sign first: $0 sign $MODEL_DIR"
+
+    info "Creating flat archive '$OUTPUT' from '$MODEL_DIR'..."
+    tar -czf "$OUTPUT" -C "$MODEL_DIR" .
+    info "Archive created: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
     echo ""
-    echo "  $ENCODED"
+    info "To package as OCI image instead:"
+    echo "  cat > Containerfile <<EOF"
+    echo "  FROM busybox:latest"
+    echo "  COPY ${MODEL_DIR}/ /model/"
+    echo "  EOF"
+    echo "  podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 ."
+    echo "  podman push quay.io/yourorg/signed-model:v1"
+    ;;
+
+help|--help|-h|"")
+    echo "Usage: $0 <action> [options]"
     echo ""
-    info "Paste this into helm/values.yaml under signing.publicKey"
+    echo "Sign and verify model files using sigstore model-signing."
+    echo "The Helm chart integrates with the Model Validation Operator to"
+    echo "enforce cryptographic model verification at pod startup."
+    echo ""
+    echo "Actions:"
+    echo "  keygen                            Generate EC P-256 signing key pair"
+    echo "  sign     <model-dir> [--key KEY]  Sign model (produces model.sig)"
+    echo "  verify   <model-dir> [--key KEY]  Verify model signature"
+    echo "  archive  <model-dir> <output>     Create flat tar.gz with model + signature"
+    echo "  help                              Show this help"
+    echo ""
+    echo "Prerequisites:"
+    echo "  pip install model-signing"
+    echo ""
+    echo "Workflow (key-based):"
+    echo "  1. Generate keys:         $0 keygen"
+    echo "  2. Download your model:   huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files"
+    echo "  3. Sign:                  $0 sign ./model-files --key signing-key.pem"
+    echo "  4. Verify:                $0 verify ./model-files --key signing-key.pub"
+    echo "  5. Package as OCI image:  podman build + podman push"
+    echo "  6. Set signing.enabled=true, signing.modelImage, and signing.publicKeyData in helm/values.yaml"
+    echo "  7. Deploy:                helm install hr-assistant helm/ -n hr-assistant"
+    echo ""
+    echo "The Model Validation Operator will:"
+    echo "  a) Detect the validation label on the predictor pod"
+    echo "  b) Inject a model-validation init container"
+    echo "  c) Verify the signature before the model server starts"
+    exit 0
     ;;
 
 *)
-    echo "Usage: $0 <action> [options]"
-    echo ""
-    echo "Actions:"
-    echo "  generate-keys             Generate cosign keypair"
-    echo "  push   <model-dir> <ref>  Push model to OCI registry"
-    echo "  sign   <ref>              Sign an OCI artifact"
-    echo "  verify <ref>              Verify an OCI artifact"
-    echo "  encode-pubkey             Base64-encode cosign.pub for values.yaml"
-    exit 1
+    error "Unknown action: $ACTION. Run '$0 help' for usage."
     ;;
 
 esac

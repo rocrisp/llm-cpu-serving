@@ -1,0 +1,22 @@
+{{- if .Values.signing.enabled }}
+apiVersion: ml.sigstore.dev/v1alpha1
+kind: ModelValidation
+metadata:
+  name: {{ .Values.model.name }}-validation
+spec:
+  config:
+    {{- if .Values.signing.publicKeyData }}
+    publicKeyConfig:
+      keyPath: /keys/signing-key.pub
+    {{- else }}
+    sigstoreConfig:
+      certificateIdentity: {{ .Values.signing.certificateIdentity | quote }}
+      certificateOidcIssuer: {{ .Values.signing.certificateOidcIssuer | quote }}
+    {{- end }}
+  model:
+    path: /data/signed-model
+    signaturePath: /data/signed-model/{{ .Values.signing.signaturePath | default "model.sig" }}
+    {{- if .Values.signing.ignoreGitPaths }}
+    ignoreGitPaths: true
+    {{- end }}
+{{- end }}

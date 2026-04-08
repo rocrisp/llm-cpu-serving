@@ -1,3 +1,12 @@
-🎉 Your vLLM-powered TinyLlama AI Model has been successfully deployed!
+Your vLLM-powered {{ .Values.model.name }} AI model has been deployed!
 
-You can access the Workbench through the Data Science project **{{ .Release.Namespace }}**
+Access the Workbench through the Data Science project **{{ .Release.Namespace }}**.
+
+Check pod status:
+  oc get pods -n {{ .Release.Namespace }}
+
+{{- if .Values.signing.enabled }}
+
+Model signing is enabled. The predictor pod will show Init:0/1 while the
+model-validation init container verifies the model signature.
+{{- end }}

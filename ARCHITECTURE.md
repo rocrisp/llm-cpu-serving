@@ -158,6 +158,7 @@ from the `model.name` field in [`helm/values.yaml`](helm/values.yaml).
 │  • HuggingFace Hub: Model download (per model.storageUri)                       │
 │  • Red Hat OpenShift Service Mesh: Networking and routing                       │
 │  • Red Hat OpenShift Serverless (KServe): Model serving platform                │
+│  • Model Validation Operator (optional, for signing.enabled)                    │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -200,6 +201,60 @@ from the `model.name` field in [`helm/values.yaml`](helm/values.yaml).
 
 5. **Response Path:**
    vLLM → `<model.name>-cpu-predictor` Service → AnythingLLM → User Interface
+
+## Model Signing and Verification Flow
+
+When `signing.enabled: true`, the chart integrates with the
+[Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+to enforce cryptographic model verification before the predictor pod serves traffic.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Model Signing Flow (signing.enabled: true)                              │
+│                                                                          │
+│  Pre-install Hooks (Helm):                                               │
+│  ┌────────────────────────────┐   ┌──────────────────────────────────┐  │
+│  │ PVC: model-storage         │   │ Job: model-download              │  │
+│  │ (hook-weight: -10)         │──▶│ Copies signed model from OCI     │  │
+│  │ Persistent storage for     │   │ image to PVC at /data/signed-model│  │
+│  │ verified model files       │   │ (hook-weight: -5)                │  │
+│  └────────────────────────────┘   └──────────────────────────────────┘  │
+│                                                                          │
+│  Runtime Resources (Helm):                                               │
+│  ┌────────────────────────────┐   ┌──────────────────────────────────┐  │
+│  │ ModelValidation CR         │   │ Secret: model-signing-pubkey     │  │
+│  │ (ml.sigstore.dev/v1alpha1) │   │ PEM-encoded public key for      │  │
+│  │ Configures verification    │   │ key-based verification           │  │
+│  │ method + model path        │   │ (optional — for key-based mode)  │  │
+│  └────────────┬───────────────┘   └──────────────────────────────────┘  │
+│               │                                                          │
+│               ▼                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Model Validation Operator (cluster-scoped)                      │   │
+│  │  Namespace: model-validation-operator-system                     │   │
+│  │                                                                  │   │
+│  │  MutatingWebhookConfiguration:                                   │   │
+│  │  • Watches pods with label: validation.ml.sigstore.dev/ml        │   │
+│  │  • Reads ModelValidation CR to get verification config           │   │
+│  │  • Injects model-validation init container into predictor pod    │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│               │                                                          │
+│               ▼                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Predictor Pod (with injected init container)                    │   │
+│  │                                                                  │   │
+│  │  InitContainer: model-validation                                 │   │
+│  │  ├── Reads public key from /keys/signing-key.pub                 │   │
+│  │  ├── Reads model from /data/signed-model                         │   │
+│  │  ├── Reads signature from /data/signed-model/model.sig           │   │
+│  │  └── If verification FAILS → pod stays in Init:Error             │   │
+│  │       If verification PASSES → pod proceeds to start             │   │
+│  │                                                                  │   │
+│  │  Container: kserve-container (vLLM)                              │   │
+│  │  └── Loads verified model from /data/signed-model                │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Performance Characteristics
 
