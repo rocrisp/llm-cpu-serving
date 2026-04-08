@@ -29,13 +29,13 @@ and added vector DB attestation.
 - Storage class set to `ocs-external-storagecluster-ceph-rbd`
 
 ### `helm/templates/servingruntime.yaml`
-- Model loaded from HuggingFace URI (or PVC when signing enabled)
+- Model loaded from signed model PVC (verified by Model Validation Operator)
 - CPU optimizations: `--dtype float32`, `VLLM_CPU_DISABLE_AVX512=1`
 - Conditional volume mounts for signed model PVC and signing key Secret
 
 ### `helm/templates/inferenceservice.yaml`
 - Resource names templated from `model.name`
-- Added `validation.ml.sigstore.dev/ml` label when signing enabled (triggers operator webhook)
+- Added `validation.ml.sigstore.dev/ml` label on predictor pods (triggers operator webhook)
 
 ### `helm/templates/anythingllm-secret.yaml`
 - Provider changed from `localai` to `generic-openai`

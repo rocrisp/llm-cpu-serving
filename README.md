@@ -15,8 +15,11 @@ deployed to almost any OpenShift AI environment.
 
 The Helm chart deploys:
 
-- An OpenShift AI Project
-- vLLM with CPU support running the model configured in [`helm/values.yaml`](helm/values.yaml)
+- A **cryptographically signed and verified AI model** using the
+  [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+  and [Sigstore](https://www.sigstore.dev) — the model's integrity is verified
+  before it can serve traffic
+- vLLM with CPU support running the verified model
 - AnythingLLM, a chat interface connected to the vLLM inference service
 
 > **Tip:** See [`helm/values.yaml`](helm/values.yaml) for all configurable settings including
@@ -48,7 +51,7 @@ Example AWS instance: [m6i.4xlarge](https://instances.vantage.sh/aws/ec2/m6i.4xl
   - Red Hat OpenShift Service Mesh
   - Red Hat OpenShift Serverless
 - [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
-  (optional — required only when `signing.enabled: true`)
+  for cryptographic model verification at deployment time
 
 ### Permissions
 
@@ -120,6 +123,27 @@ Common storage class names:
 - Azure Disk: `managed-premium`
 - GCP PD: `standard-rwo`
 
+#### 5. Model Validation Operator
+
+Install the operator that enforces model signature verification:
+
+```bash
+oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
+```
+
+Verify it's running:
+
+```bash
+oc get pods -n model-validation-operator-system
+oc get crd modelvalidations.ml.sigstore.dev
+```
+
+#### 6. Signed Model
+
+The model must be signed and packaged as an OCI image before deployment. See
+[Sign a Model](#sign-a-model) for the full workflow. The default `values.yaml`
+ships with a pre-signed model at `quay.io/rocrisp/qwen25-05b-signed:v2`.
+
 ### Clone
 
 ```bash
@@ -148,24 +172,18 @@ oc new-project ${PROJECT}
 
 ### Install with Helm
 
-**Standard deployment** (model downloaded from HuggingFace):
-
 ```bash
 helm install ${PROJECT} helm/ --namespace ${PROJECT}
 ```
 
-**Deployment with model signing** (model verified before serving — see
-[Model Signing and Verification](#model-signing-and-verification-optional) for
-the full signing workflow):
+Helm executes in this order:
 
-```bash
-# Ensure the Model Validation Operator is installed first
-oc get crd modelvalidations.ml.sigstore.dev
-
-# Install — the pre-install hooks download and stage the signed model,
-# then the operator injects a verification init container into the predictor pod
-helm install ${PROJECT} helm/ --namespace ${PROJECT}
-```
+1. **Pre-install hook** — creates the `model-storage` PVC and runs the
+   `model-download` Job to copy the signed model from the OCI image to the PVC
+2. **Main resources** — creates the `ModelValidation` CR, `ServingRuntime`,
+   `InferenceService`, AnythingLLM workbench, and supporting resources
+3. **Operator webhook** — the Model Validation Operator detects the predictor pod
+   and injects a `model-validation` init container that verifies the signature
 
 ### Wait for pods
 
@@ -173,23 +191,11 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 oc -n ${PROJECT} get pods -w
 ```
 
-**Standard deployment** — wait until all pods show `Running` or `Completed`:
+Watch the deployment progress:
 
 ```
 NAME                                            READY   STATUS      RESTARTS   AGE
-anythingllm-0                                   3/3     Running     0          2m
-anythingllm-seed-xxxxx                          0/1     Completed   0          2m
-<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      2/2     Running     0          2m
-```
-
-> The predictor pod may take 30-60 seconds to become ready as it downloads the model
-> from HuggingFace on first start.
-
-**With model signing enabled** — the predictor pod goes through an extra init phase:
-
-```
-NAME                                            READY   STATUS      RESTARTS   AGE
-model-download-xxxxx                            0/1     Completed   0          30s    <-- pre-install hook
+model-download-xxxxx                            0/1     Completed   0          30s    <-- signed model copied to PVC
 anythingllm-0                                   3/3     Running     0          2m
 anythingllm-seed-xxxxx                          0/1     Completed   0          2m
 <model-name>-cpu-predictor-xxxxxxxxx-xxxxx      0/2     Init:0/1    0          30s    <-- verifying signature
@@ -198,7 +204,7 @@ anythingllm-seed-xxxxx                          0/1     Completed   0          2
 
 The `Init:0/1` phase is the Model Validation Operator's init container verifying
 the cryptographic signature. Once it passes, the pod transitions to `Running`.
-If verification fails, the pod stays in `Init:Error` and never serves traffic.
+If verification fails, the pod stays in `Init:Error` and the model is never served.
 
 ### Test
 
@@ -249,10 +255,10 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 Expected: a JSON response with `choices[0].message.content` containing the model's answer.
 
-#### Validate model signing (when signing.enabled)
+#### Validate model signing
 
-Run these checks after deploying with `signing.enabled: true` to confirm the
-full signing flow is working end-to-end:
+Run these checks after deploying to confirm the model signing and verification
+flow is working end-to-end:
 
 ```bash
 PROJECT="hr-assistant"
@@ -309,16 +315,30 @@ helm uninstall ${PROJECT} --namespace ${PROJECT}
 
 ## Switching Models
 
-Update the `model` section in [`helm/values.yaml`](helm/values.yaml):
+To use a different model, you must sign it, package it as an OCI image, and update
+`values.yaml`:
+
+1. **Sign and package the new model** (see [Sign a Model](#sign-a-model)):
+
+```bash
+huggingface-cli download <org>/<model-name> --local-dir ./model-files
+./scripts/sign-model.sh sign ./model-files --key signing-key.pem
+podman build --platform linux/amd64 -t quay.io/yourorg/<model-name>-signed:v1 .
+podman push quay.io/yourorg/<model-name>-signed:v1
+```
+
+2. **Update [`helm/values.yaml`](helm/values.yaml):**
 
 ```yaml
 model:
-  storageUri: "hf://<org>/<model-name>"
   name: "<short-name>"
   maxModelLen: 2048
+
+signing:
+  modelImage: "quay.io/yourorg/<model-name>-signed:v1"
 ```
 
-Then reinstall:
+3. **Reinstall:**
 
 ```bash
 helm uninstall ${PROJECT} --namespace ${PROJECT}
@@ -329,18 +349,18 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 
 | Model | Parameters | Notes |
 |---|---|---|
-| `Qwen/Qwen2.5-0.5B-Instruct` | 0.5B | Good balance of quality and speed |
+| `Qwen/Qwen2.5-0.5B-Instruct` | 0.5B | Good balance of quality and speed (default) |
 | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | Smallest, fastest |
 | `HuggingFaceTB/SmolLM2-360M-Instruct` | 360M | Good balance |
 | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1.7B | Best quality, more resources |
 | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 1.1B | Alternative option |
 
-## Model Signing and Verification (Optional)
+## Model Signing and Verification
 
-This chart supports cryptographic model verification using the
-[Model Validation Operator](https://github.com/sigstore/model-validation-operator)
-and [Sigstore model-signing](https://github.com/sigstore/model-transparency). When
-`signing.enabled: true`, the deployment flow becomes:
+All models deployed by this chart are cryptographically signed and verified
+using the [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+and [Sigstore model-signing](https://github.com/sigstore/model-transparency).
+The deployment flow is:
 
 1. **model-download** (Helm pre-install hook) — copies a pre-signed model from an
    OCI image (or downloads a `.tar.gz` archive) onto a PVC
@@ -378,32 +398,9 @@ helm install
                   [kserve-container]   -------> loads model from /data/signed-model
 ```
 
-### Prerequisites
+### Sign a Model
 
-1. **Model Validation Operator** installed on the cluster:
-
-```bash
-# Install via OLM (OpenShift)
-oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
-
-# Or for non-OLM clusters with cert-manager
-kubectl apply -k https://github.com/sigstore/model-validation-operator/config/overlays/production
-```
-
-Verify the operator is running:
-
-```bash
-oc get pods -n model-validation-operator-system
-oc get crd modelvalidations.ml.sigstore.dev
-```
-
-2. **model-signing** Python package (for signing models locally):
-
-```bash
-pip install model-signing
-```
-
-### Quick Start — Sign a Model
+Requires: `pip install model-signing` ([sigstore/model-transparency](https://github.com/sigstore/model-transparency))
 
 ```bash
 # 1. Download the model locally
@@ -439,55 +436,7 @@ podman push quay.io/yourorg/signed-model:v1
 > The helper script `./scripts/sign-model.sh` wraps the keygen, sign, verify, and
 > archive steps. Run `./scripts/sign-model.sh help` for usage.
 
-### End-to-End Deployment with Signing
-
-This walkthrough covers the complete flow from signing to verified deployment:
-
-```bash
-PROJECT="hr-assistant"
-
-# --- One-time setup ---
-
-# 1. Install the Model Validation Operator (if not already installed)
-oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
-oc wait --for=condition=Available deployment/model-validation-controller-manager \
-    -n model-validation-operator-system --timeout=120s
-
-# 2. Sign a model (see "Quick Start — Sign a Model" above for details)
-#    Assumes you have a signed OCI image at quay.io/yourorg/signed-model:v1
-#    and the public key in signing-key.pub
-
-# --- Deploy ---
-
-# 3. Update helm/values.yaml with your signing config:
-#    signing.enabled: true
-#    signing.modelImage: "quay.io/yourorg/signed-model:v1"
-#    signing.publicKeyData: <contents of signing-key.pub>
-
-# 4. Create project and deploy
-oc new-project ${PROJECT}
-helm install ${PROJECT} helm/ --namespace ${PROJECT}
-
-# 5. Watch the deployment
-oc get pods -n ${PROJECT} -w
-# Wait for model-download to Complete, then predictor pod to go from
-# Init:0/1 → Running (this is the verification happening)
-
-# --- Validate ---
-
-# 6. Confirm the signature was verified
-oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
-# Should print: "Verification succeeded"
-
-# 7. Test inference
-MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
-oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
-    curl -s http://${MODEL_NAME}-cpu-predictor:8080/v1/chat/completions \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"${MODEL_NAME}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":30}"
-```
-
-### Enable in values.yaml
+### Configure in values.yaml
 
 **Key-based verification** (recommended for air-gapped or private models):
 
@@ -524,13 +473,14 @@ On `helm install`:
 1. The **model-storage PVC** is created (pre-install hook, weight -10)
 2. The **model-download Job** copies model files from the OCI image to the PVC
    (pre-install hook, weight -5)
-3. Helm creates the **ModelValidation CR**, **signing-pubkey Secret** (if using
-   key-based verification), **ServingRuntime**, and **InferenceService**
+3. Helm creates the **ModelValidation CR**, **signing-pubkey Secret**,
+   **ServingRuntime**, and **InferenceService**
 4. When the predictor pod is created, the operator's webhook detects the
    `validation.ml.sigstore.dev/ml` label and injects a `model-validation` init
    container that inherits all volume mounts from the main containers
 5. The init container runs the verification agent — on success, the pod proceeds
-   to start vLLM; on failure, the pod stays in `Init:Error`
+   to start vLLM; on failure, the pod stays in `Init:Error` and the model is
+   never served
 
 ### Helm Resources Created
 
@@ -545,8 +495,8 @@ On `helm install`:
 
 ### Testing Model Validation
 
-See [Validate model signing](#validate-model-signing-when-signingenabled) in the
-Deploy section for the full 6-step validation procedure with expected outputs.
+See [Validate model signing](#validate-model-signing) in the Deploy section for
+the full 6-step validation procedure with expected outputs.
 
 ### What Happens on Verification Failure
 
@@ -563,11 +513,6 @@ oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
 # - Model files modified after signing
 # - Wrong certificateIdentity/certificateOidcIssuer (keyless mode)
 ```
-
-### Disabling Model Signing
-
-Set `signing.enabled: false` in `values.yaml`. The chart reverts to downloading
-the model directly from HuggingFace via `model.storageUri`.
 
 ## Vector DB Attestation and Integrity (Optional)
 

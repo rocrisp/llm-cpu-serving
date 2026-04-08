@@ -364,7 +364,7 @@ The `anythingllm` pod has 3 containers:
 - **anythingllm-automation:** Database management sidecar
 
 The `qwen25-05b-cpu-predictor` pod has 2-3 containers:
-- **model-validation (init container):** Verifies model signature (when signing enabled)
+- **model-validation (init container):** Verifies model signature before serving
 - **agent:** KServe agent for model lifecycle
 - **kserve-container:** vLLM runtime with the model
 

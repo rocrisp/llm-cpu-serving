@@ -147,7 +147,7 @@ else
 fi
 echo ""
 
-# Check 7: Model Validation Operator (optional — for model signing verification)
+# Check 7: Model Validation Operator (required for model signing verification)
 echo "Checking Model Validation Operator..."
 if oc get crd modelvalidations.ml.sigstore.dev &>/dev/null; then
     print_success "Model Validation Operator CRD installed"
@@ -163,7 +163,7 @@ if oc get crd modelvalidations.ml.sigstore.dev &>/dev/null; then
         print_warning "Model Validation Operator deployment not found in $MVO_NS"
     fi
 else
-    print_warning "Model Validation Operator not installed (optional — needed for signing.enabled)"
+    print_failure "Model Validation Operator not installed (required for model signing)"
     echo "  Install: oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm"
 fi
 echo ""

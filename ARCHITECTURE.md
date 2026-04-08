@@ -158,7 +158,7 @@ from the `model.name` field in [`helm/values.yaml`](helm/values.yaml).
 │  • HuggingFace Hub: Model download (per model.storageUri)                       │
 │  • Red Hat OpenShift Service Mesh: Networking and routing                       │
 │  • Red Hat OpenShift Serverless (KServe): Model serving platform                │
-│  • Model Validation Operator (optional, for signing.enabled)                    │
+│  • Model Validation Operator (model signature verification)                     │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -204,13 +204,13 @@ from the `model.name` field in [`helm/values.yaml`](helm/values.yaml).
 
 ## Model Signing and Verification Flow
 
-When `signing.enabled: true`, the chart integrates with the
+The chart integrates with the
 [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
 to enforce cryptographic model verification before the predictor pod serves traffic.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Model Signing Flow (signing.enabled: true)                              │
+│  Model Signing and Verification Flow                                     │
 │                                                                          │
 │  Pre-install Hooks (Helm):                                               │
 │  ┌────────────────────────────┐   ┌──────────────────────────────────┐  │

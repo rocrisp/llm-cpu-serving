@@ -162,10 +162,10 @@ oc get storageclass
 - ✅ ServiceAccount (anythingllm-serviceaccount.yaml)
 - ✅ PVC (workbench-pvc.yaml)
 - ✅ Seed Job (init_job.yaml)
-- ✅ Model storage PVC (model-storage-pvc.yaml, pre-install hook, when `signing.enabled`)
-- ✅ Model download Job (model-download-job.yaml, pre-install hook, when `signing.enabled`)
-- ✅ ModelValidation CR (model-validation-cr.yaml, when `signing.enabled`)
-- ✅ Signing public key Secret (signing-pubkey-secret.yaml, when `signing.enabled` + `publicKeyData`)
+- ✅ Model storage PVC (model-storage-pvc.yaml, pre-install hook)
+- ✅ Model download Job (model-download-job.yaml, pre-install hook)
+- ✅ ModelValidation CR (model-validation-cr.yaml)
+- ✅ Signing public key Secret (signing-pubkey-secret.yaml)
 - ✅ Vector DB attestation Job (vectordb-attestation-job.yaml, when `attestation.enabled`)
 - ✅ Vector DB integrity CronJob (vectordb-integrity-cronjob.yaml, when `attestation.enabled`)
 - ✅ Attestation ConfigMap (vectordb-attestation-configmap.yaml, when `attestation.enabled`)
@@ -249,10 +249,10 @@ helm upgrade hr-assistant helm/ -n hr-assistant
    ```
 3. Upgrade deployment
 
-## Model Signing and Verification (Optional)
+## Model Signing and Verification
 
-When `signing.enabled: true` in `helm/values.yaml`, the chart integrates with
-the [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
+The chart integrates with the
+[Model Validation Operator](https://github.com/sigstore/model-validation-operator)
 to enforce cryptographic model verification before the predictor pod serves traffic.
 
 ### How It Works
