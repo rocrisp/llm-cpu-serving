@@ -274,27 +274,28 @@ to enforce cryptographic model verification before the predictor pod serves traf
 
 ### Signing Workflow
 
+For the full step-by-step guide, see **[docs/SIGNING-GUIDE.md](docs/SIGNING-GUIDE.md)**.
+
+Quick reference:
+
 ```bash
-# 1. Download the model
-huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
+# 1. Set up environment
+python3 -m venv signing-env && source signing-env/bin/activate
 
-# 2. Generate a signing key pair
-openssl ecparam -genkey -name prime256v1 -noout -out signing-key.pem
-openssl ec -in signing-key.pem -pubout -out signing-key.pub
+# 2. Download the model
+git lfs install
+git clone https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct ./model-files
+rm -rf ./model-files/.git ./model-files/.gitattributes
 
-# 3. Sign the model
-python3 -m model_signing sign key \
-    --private_key signing-key.pem \
-    --signature ./model-files/model.sig \
-    --ignore-git-paths ./model-files
+# 3. Sign the model (install model-transparency first)
+git clone https://github.com/sigstore/model-transparency
+cd model-transparency && pip3 install . && cd ..
+python3 -m model_signing sign sigstore --signature ./model-files/model.sig ./model-files
 
-# 4. Package as OCI image
-cat > Containerfile <<EOF
-FROM busybox:latest
-COPY model-files/ /model/
-EOF
-podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
-podman push quay.io/yourorg/signed-model:v1
+# 4. Upload signed model to HuggingFace
+pip3 install huggingface_hub
+hf auth login
+hf upload YOUR_HF_USERNAME/signed-model ./model-files .
 ```
 
 ### Configuration

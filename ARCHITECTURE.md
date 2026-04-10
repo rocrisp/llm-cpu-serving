@@ -33,15 +33,12 @@ graph TB
             end
 
             subgraph signing["Model Signing Resources"]
-                PVC[(PVC: model-storage<br/>Signed model files)]
                 MVR[ModelValidation CR<br/>ml.sigstore.dev/v1alpha1]
                 PubKey[Secret: model-signing-pubkey<br/>EC P-256 public key]
             end
 
-            PVC -->|/data/signed-model| Init
             PubKey -->|/keys/signing-key.pub| Init
             MVR --> Operator
-            PVC --> VLLM
         end
 
         subgraph operator-ns["Namespace: model-validation-operator-system"]
@@ -68,23 +65,22 @@ graph TB
 sequenceDiagram
     participant Dev as Developer
     participant Helm
-    participant PVC as model-storage PVC
-    participant Job as model-download Job
+    participant KServe as KServe / storage-initializer
+    participant HF as HuggingFace
     participant MVO as Model Validation Operator
     participant Pod as Predictor Pod
     participant vLLM
 
     Dev->>Helm: helm install hr-assistant helm/
-    Note over Helm: Pre-install hooks (ordered by weight)
-
-    Helm->>PVC: Create PVC (hook-weight: -10)
-    Helm->>Job: Create model-download Job (hook-weight: -5)
-    Job->>PVC: Copy signed model + model.sig from OCI image
 
     Note over Helm: Main resources
     Helm->>Helm: Create ModelValidation CR
     Helm->>Helm: Create signing-pubkey Secret
     Helm->>Helm: Create ServingRuntime + InferenceService
+
+    Note over KServe: storage-initializer downloads model
+    KServe->>HF: Download model via storageUri
+    HF-->>KServe: Model files + model.sig → /mnt/models
 
     Note over MVO: Webhook intercepts pod creation
     MVO->>MVO: Detect validation.ml.sigstore.dev/ml label
@@ -93,12 +89,12 @@ sequenceDiagram
 
     Note over Pod: Init container runs
     Pod->>Pod: Read public key from /keys/signing-key.pub
-    Pod->>Pod: Read model from /data/signed-model
+    Pod->>Pod: Read model from /mnt/models
     Pod->>Pod: Verify signature (model.sig)
 
     alt Verification passes
         Pod->>vLLM: Start kserve-container
-        vLLM->>vLLM: Load model from /data/signed-model
+        vLLM->>vLLM: Load model from /mnt/models
         vLLM-->>Dev: Ready to serve (2/2 Running)
     else Verification fails
         Pod-->>Dev: Pod stays in Init:Error
@@ -136,18 +132,17 @@ sequenceDiagram
 ```mermaid
 graph LR
     subgraph sign["Developer Workstation"]
-        Model[Model Files] --> Sign["model_signing sign<br/>(EC P-256 private key)"]
+        Model[Model Files] --> Sign["model_signing sign<br/>(EC P-256 or keyless)"]
         Sign --> Sig[model.sig]
-        Model --> OCI[OCI Image]
-        Sig --> OCI
     end
 
-    OCI -->|push to registry| Registry[(Container Registry<br/>e.g. quay.io)]
+    Model -->|hf upload| HF[(HuggingFace<br/>signed-model repo)]
+    Sig -->|hf upload| HF
 
-    Registry -->|model-download Job| PVC[(PVC: model-storage)]
+    HF -->|KServe storageUri| MntModels["/mnt/models"]
 
     subgraph verify["Predictor Pod (Init)"]
-        PVC --> Agent[model-validation<br/>init container]
+        MntModels --> Agent[model-validation<br/>init container]
         Key[Public Key<br/>from Secret] --> Agent
         Agent -->|signature valid| Pass[✓ Pod starts<br/>vLLM serves model]
         Agent -->|signature invalid| Fail[✗ Init:Error<br/>Model never served]
@@ -180,7 +175,7 @@ graph LR
 | Init Container | `model-validation` — injected by Model Validation Operator |
 | Containers | `agent` (KServe Agent), `kserve-container` (vLLM) |
 | Port | 8080 (HTTP) |
-| Model source | `/data/signed-model` (from PVC, cryptographically verified) |
+| Model source | `/mnt/models` (downloaded via KServe storageUri, cryptographically verified) |
 | vLLM config | `--dtype float32`, `VLLM_CPU_DISABLE_AVX512=1`, `ONEDNN_VERBOSE=0` |
 | API endpoints | `GET /health`, `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/completions` |
 | Resources | Requests: 2 CPU / 4Gi — Limits: 8 CPU / 8Gi |
@@ -201,12 +196,10 @@ graph LR
 
 | Resource | Purpose |
 |---|---|
-| `PVC/model-storage` | Stores the signed model (pre-install hook) |
-| `Job/model-download` | Copies model from OCI image to PVC (pre-install hook) |
 | `ModelValidation/<name>-validation` | Configures signature verification |
 | `Secret/model-signing-pubkey` | PEM-encoded public key for verification |
 | `InferenceService/<name>-cpu` | KServe predictor with validation label |
-| `ServingRuntime/vllm-cpu` | vLLM container spec with PVC mounts |
+| `ServingRuntime/vllm-cpu` | vLLM container spec |
 | `Secret/<name>-vllm-cpu` | AnythingLLM LLM provider config |
 | `Secret/anythingllm-api` | API key for AnythingLLM |
 | `ServiceAccount/anythingllm` | Identity for AnythingLLM pod |

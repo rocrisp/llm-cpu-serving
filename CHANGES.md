@@ -26,12 +26,12 @@ and added vector DB attestation.
 - Model changed to `hf://Qwen/Qwen2.5-0.5B-Instruct`
 - Added `signing` section for Model Validation Operator integration
 - Added `attestation` section for vector DB integrity checking
-- Storage class set to `ocs-external-storagecluster-ceph-rbd`
+- Storage class set to `gp3-csi`
 
 ### `helm/templates/servingruntime.yaml`
-- Model loaded from signed model PVC (verified by Model Validation Operator)
+- Model loaded from `/mnt/models` (KServe storageUri handles download)
 - CPU optimizations: `--dtype float32`, `VLLM_CPU_DISABLE_AVX512=1`
-- Conditional volume mounts for signed model PVC and signing key Secret
+- Conditional volume mounts for signing key Secret (when `publicKeyData` is set)
 
 ### `helm/templates/inferenceservice.yaml`
 - Resource names templated from `model.name`
@@ -50,9 +50,8 @@ and added vector DB attestation.
 
 ### Model Signing & Verification
 - `helm/templates/model-validation-cr.yaml` — `ModelValidation` custom resource for the operator
-- `helm/templates/model-download-job.yaml` — Pre-install hook that copies signed model to PVC
-- `helm/templates/model-storage-pvc.yaml` — PVC for signed model storage (pre-install hook)
 - `helm/templates/signing-pubkey-secret.yaml` — Public key Secret for key-based verification
+- `docs/SIGNING-GUIDE.md` — Step-by-step guide for signing and uploading models
 
 ### Vector DB Attestation
 - `helm/templates/vectordb-attestation-job.yaml` — Post-install hook for baseline hash
@@ -66,12 +65,10 @@ and added vector DB attestation.
 - `helm/templates/anythingllm-serviceaccount.yaml` — ServiceAccount for workbench
 - `helm/templates/vllm-chat-template-configmap.yaml` — Chat template ConfigMap
 - `scripts/verify-prerequisites.sh` — Cluster prerequisites checker
-- `scripts/sign-model.sh` — Model signing helper script
 
 ### Documentation
 - `ARCHITECTURE.md` — Detailed component architecture
 - `DEPLOYMENT-GUIDE.md` — Cross-cluster deployment guide
-- `VALIDATION-REPORT.md` — End-to-end model signing validation report
 - `BLOG.md` — Beginner's guide to running LLMs on CPU
 
 ## Files Removed (from original)

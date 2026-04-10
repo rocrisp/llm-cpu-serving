@@ -774,14 +774,14 @@ When you deploy an AI model in production, how do you know the model hasn't been
 This project integrates with the [Model Validation Operator](https://github.com/sigstore/model-validation-operator) from Sigstore to enforce model verification at deployment time.
 
 ```
-Developer signs model → Packages as OCI image → Deploys with Helm
+Developer signs model → Uploads to HuggingFace → Deploys with Helm
                                                        │
                                     ┌──────────────────┘
                                     ▼
-                         ┌─────────────────────┐
-                         │  model-download Job  │
-                         │  Copies model to PVC │
-                         └──────────┬──────────┘
+                         ┌──────────────────────────────────┐
+                         │  KServe storage-initializer       │
+                         │  Downloads model via storageUri   │
+                         └──────────┬───────────────────────┘
                                     │
                                     ▼
                          ┌─────────────────────────────────┐
@@ -792,7 +792,7 @@ Developer signs model → Packages as OCI image → Deploys with Helm
                                     ▼
                          ┌─────────────────────────────┐
                          │  Init container verifies     │
-                         │  signature before pod starts │
+                         │  signature at /mnt/models    │
                          └──────────┬──────────────────┘
                                     │
                             ┌───────┴───────┐
@@ -803,36 +803,18 @@ Developer signs model → Packages as OCI image → Deploys with Helm
                       and serves      (Init:Error)
 ```
 
-### Enabling Model Signing
+### Model Signing Workflow
 
-1. **Generate a signing key pair:**
-   ```bash
-   ./scripts/sign-model.sh keygen
-   ```
+The model is downloaded from HuggingFace, signed locally using [sigstore/model-transparency](https://github.com/sigstore/model-transparency), and uploaded back to a HuggingFace repository. See the [Signing Guide](docs/SIGNING-GUIDE.md) for the complete step-by-step instructions.
 
-2. **Sign your model:**
-   ```bash
-   ./scripts/sign-model.sh sign ./model-files --key signing-key.pem
-   ```
+At deploy time, pass your signed model's HuggingFace URI:
 
-3. **Package as OCI image and push:**
-   ```bash
-   podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
-   podman push quay.io/yourorg/signed-model:v1
-   ```
+```bash
+helm install hr-assistant helm/ --namespace hr-assistant \
+  --set model.storageUri="hf://YOUR_HF_USERNAME/signed-model"
+```
 
-4. **Configure `values.yaml`:**
-   ```yaml
-   signing:
-     enabled: true
-     modelImage: "quay.io/yourorg/signed-model:v1"
-     publicKeyData: |
-       -----BEGIN PUBLIC KEY-----
-       <your public key>
-       -----END PUBLIC KEY-----
-   ```
-
-5. **Deploy** — the operator automatically verifies the model before the pod can serve traffic.
+The Model Validation Operator automatically verifies the signature before the pod can serve traffic.
 
 ### What Happens If Verification Fails?
 

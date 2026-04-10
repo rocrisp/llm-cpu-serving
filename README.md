@@ -29,21 +29,23 @@ For the detailed component architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requirements
 
-### Hardware
+<details>
+<summary><strong>Hardware</strong></summary>
 
 | | CPU | Memory | Storage | GPU |
 |---|---|---|---|---|
 | **Minimum** | 2 cores | 4 Gi | 5 Gi | None |
 | **Recommended** | 8 cores | 8 Gi | 5 Gi | None |
 
-### CPU Architecture Notes
-
 Compiled for Intel CPUs. AVX512 BRGEMM optimizations are disabled by default for stability
 (`VLLM_CPU_DISABLE_AVX512=1`).
 
 Example AWS instance: [m6i.4xlarge](https://instances.vantage.sh/aws/ec2/m6i.4xlarge) (16 vCPU, 64 GiB)
 
-### Software
+</details>
+
+<details>
+<summary><strong>Software</strong></summary>
 
 - Red Hat OpenShift 4.16.24+
 - Red Hat OpenShift AI 2.16.2+
@@ -53,21 +55,25 @@ Example AWS instance: [m6i.4xlarge](https://instances.vantage.sh/aws/ec2/m6i.4xl
 - [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
   for cryptographic model verification at deployment time
 
-### Permissions
+</details>
 
-Standard user. No elevated cluster permissions required.
+**Permissions:** Standard user. No elevated cluster permissions required.
 
 ## Deploy
 
 ### Prerequisites
 
-#### 1. OpenShift AI Installed and Configured
+<details>
+<summary><strong>1. OpenShift AI Installed and Configured</strong></summary>
 
 - Red Hat OpenShift AI 2.16.2+ with single-model serving platform:
   - Red Hat OpenShift Service Mesh
   - Red Hat OpenShift Serverless (KServe)
 
-#### 2. Data Science Gateway
+</details>
+
+<details>
+<summary><strong>2. Data Science Gateway</strong></summary>
 
 ```bash
 oc get gateway data-science-gateway -n openshift-ingress
@@ -75,7 +81,10 @@ oc get gateway data-science-gateway -n openshift-ingress
 
 Expected output should show the gateway in `PROGRAMMED` state.
 
-#### 3. AnythingLLM ImageStream (REQUIRED)
+</details>
+
+<details>
+<summary><strong>3. AnythingLLM ImageStream (REQUIRED)</strong></summary>
 
 ```bash
 oc get imagestream custom-anythingllm -n redhat-ods-applications
@@ -107,7 +116,10 @@ spec:
 EOF
 ```
 
-#### 4. Storage Class
+</details>
+
+<details>
+<summary><strong>4. Storage Class</strong></summary>
 
 Verify your cluster has a compatible storage class. Update `storageClassName` in
 [`helm/values.yaml`](helm/values.yaml) if needed:
@@ -123,7 +135,10 @@ Common storage class names:
 - Azure Disk: `managed-premium`
 - GCP PD: `standard-rwo`
 
-#### 5. Model Validation Operator
+</details>
+
+<details>
+<summary><strong>5. Model Validation Operator</strong></summary>
 
 Install the operator that enforces model signature verification:
 
@@ -138,11 +153,20 @@ oc get pods -n model-validation-operator-system
 oc get crd modelvalidations.ml.sigstore.dev
 ```
 
-#### 6. Model
+</details>
 
-The model must be signed and uploaded to HuggingFace before deployment.
+<details>
+<summary><strong>6. Signed Model</strong></summary>
+
+This project uses a HuggingFace model (default: `Qwen/Qwen2.5-0.5B-Instruct`)
+that is downloaded locally, cryptographically signed using
+[sigstore/model-transparency](https://github.com/sigstore/model-transparency),
+and uploaded back to HuggingFace as a signed model. The signed model is then
+referenced at [install time](#install-with-helm) via `--set model.storageUri`.
+
 Follow the [Signing Guide](docs/SIGNING-GUIDE.md) for the complete workflow.
-The signed model is referenced at [install time](#install-with-helm) via `--set model.storageUri`.
+
+</details>
 
 ### Clone
 
@@ -155,8 +179,6 @@ git clone https://github.com/rocrisp/llm-cpu-serving.git && \
 > See [CHANGES.md](CHANGES.md) for modifications.
 
 ### Portability Checklist
-
-Run the prerequisites check from the cloned repo:
 
 ```bash
 ./scripts/verify-prerequisites.sh
@@ -175,11 +197,39 @@ oc new-project ${PROJECT}
 ```bash
 helm install ${PROJECT} helm/ --namespace ${PROJECT} \
     --set signing.enabled=true \
-    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model
+    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model \
+    --set signing.certificateIdentity="YOUR_EMAIL" \
+    --set signing.certificateOidcIssuer="https://github.com/login/oauth"
 ```
 
-Replace `YOUR_HF_USERNAME` with the HuggingFace username you used when
-uploading the signed model in the [Signing Guide](docs/SIGNING-GUIDE.md).
+Replace `YOUR_HF_USERNAME` with the HuggingFace username and `YOUR_EMAIL` with
+the identity you used when signing the model in the
+[Signing Guide](docs/SIGNING-GUIDE.md).
+
+<details>
+<summary><strong>Verification mode options</strong></summary>
+
+**Keyless (OIDC) verification** — the default, shown above. Common OIDC issuers:
+
+| Provider | `certificateOidcIssuer` |
+|---|---|
+| GitHub | `https://github.com/login/oauth` |
+| Google | `https://accounts.google.com` |
+| Microsoft | `https://login.microsoftonline.com` |
+
+**Key-based verification** — for air-gapped or private models, pass the public key
+instead of an OIDC identity:
+
+```bash
+helm install ${PROJECT} helm/ --namespace ${PROJECT} \
+    --set signing.enabled=true \
+    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model \
+    --set-file signing.publicKeyData=signing-key.pub
+```
+
+See [`helm/values.yaml`](helm/values.yaml) for all signing options.
+
+</details>
 
 Helm executes in this order:
 
@@ -194,7 +244,8 @@ Helm executes in this order:
 oc -n ${PROJECT} get pods -w
 ```
 
-Watch the deployment progress:
+<details>
+<summary><strong>Expected output</strong></summary>
 
 ```
 NAME                                            READY   STATUS      RESTARTS   AGE
@@ -208,25 +259,21 @@ The `Init:1/2` phase is the Model Validation Operator's init container verifying
 the cryptographic signature. Once it passes, the pod transitions to `Running`.
 If verification fails, the pod stays in `Init:Error` and the model is never served.
 
+</details>
+
 ### Test
 
 #### Access the UI
-
-Get the OpenShift AI Dashboard URL:
 
 ```bash
 oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}' && echo
 ```
 
-Navigate to **Projects** → **hr-assistant** (or your `${PROJECT}` name).
+Navigate to **Projects** → **hr-assistant** → open the **AnythingLLM** workbench → click the **Assistant to the HR Representative** workspace.
 
 ![OpenShift AI Projects](docs/images/rhoai-1.png)
 
-Open the **AnythingLLM** workbench.
-
 ![OpenShift AI Projects](docs/images/rhoai-2.png)
-
-Click on the **Assistant to the HR Representative** workspace and start chatting.
 
 **Direct Access URL:**
 
@@ -234,7 +281,8 @@ Click on the **Assistant to the HR Representative** workspace and start chatting
 echo "https://$(oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}')/notebook/${PROJECT}/anythingllm/"
 ```
 
-#### Test the API directly
+<details>
+<summary><strong>Test the API directly</strong></summary>
 
 ```bash
 MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
@@ -257,10 +305,12 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 Expected: a JSON response with `choices[0].message.content` containing the model's answer.
 
-#### Validate model signing
+</details>
 
-Run these checks after deploying to confirm the model signing and verification
-flow is working end-to-end:
+<details>
+<summary><strong>Validate model signing (end-to-end check)</strong></summary>
+
+Run these checks after deploying to confirm the signing and verification flow:
 
 ```bash
 PROJECT="hr-assistant"
@@ -293,8 +343,7 @@ All steps passing confirms: the signed model was downloaded, the operator
 injected the verification init container, the signature was verified, and the
 model is serving traffic through the verified path.
 
-> For a detailed validation report with full command output, see
-> [VALIDATION-REPORT.md](VALIDATION-REPORT.md).
+</details>
 
 ### Delete
 
@@ -304,34 +353,20 @@ helm uninstall ${PROJECT} --namespace ${PROJECT}
 
 ## Switching Models
 
-To use a different model, you must sign it, package it as an OCI image, and update
-`values.yaml`:
+<details>
+<summary><strong>How to switch to a different model</strong></summary>
 
-1. **Sign and package the new model** (see [Sign a Model](#sign-a-model)):
-
-```bash
-hf download <org>/<model-name> --local-dir ./model-files
-./scripts/sign-model.sh sign ./model-files --key signing-key.pem
-podman build --platform linux/amd64 -t quay.io/yourorg/<model-name>-signed:v1 .
-podman push quay.io/yourorg/<model-name>-signed:v1
-```
-
-2. **Update [`helm/values.yaml`](helm/values.yaml):**
-
-```yaml
-model:
-  name: "<short-name>"
-  maxModelLen: 2048
-
-signing:
-  modelImage: "quay.io/yourorg/<model-name>-signed:v1"
-```
-
-3. **Reinstall:**
+Follow the [Signing Guide](docs/SIGNING-GUIDE.md) to download, sign, and upload
+the new model to HuggingFace, then reinstall:
 
 ```bash
 helm uninstall ${PROJECT} --namespace ${PROJECT}
-helm install ${PROJECT} helm/ --namespace ${PROJECT}
+helm install ${PROJECT} helm/ --namespace ${PROJECT} \
+  --set signing.enabled=true \
+  --set model.name="<short-name>" \
+  --set model.storageUri="hf://YOUR_HF_USERNAME/<model-name>-signed" \
+  --set signing.certificateIdentity="YOUR_EMAIL" \
+  --set signing.certificateOidcIssuer="https://github.com/login/oauth"
 ```
 
 **Recommended CPU-friendly models:**
@@ -344,161 +379,18 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT}
 | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1.7B | Best quality, more resources |
 | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 1.1B | Alternative option |
 
-## Model Signing and Verification
-
-All models deployed by this chart are cryptographically signed and verified
-using the [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
-and [Sigstore model-signing](https://github.com/sigstore/model-transparency).
-The deployment flow is:
-
-1. **ModelValidation CR** — tells the operator how to verify the model (public key
-   or Sigstore keyless)
-2. **Webhook injection** — the operator's mutating webhook intercepts the predictor
-   pod (via the `validation.ml.sigstore.dev/ml` label) and injects a
-   `model-validation` init container
-3. **Init container verification** — the injected init container verifies the model
-   signature before the main vLLM container starts. If verification fails, the pod
-   stays in `Init:Error` and never serves traffic
-
-### Architecture
-
-```
-helm install
-    |
-    v
-[ModelValidation CR] <--- created by Helm
-[InferenceService]   <--- label: validation.ml.sigstore.dev/ml
-                               |
-                               v
-[Operator Webhook] -------> injects init container
-                               |
-                               v
-[model-validation init] --> verifies signature at /mnt/models
-                               |  (pass)
-                               v
-[kserve-container]   -------> loads model from /mnt/models
-```
-
-### Sign a Model
-
-For the complete step-by-step guide — including virtual environment setup,
-installing the HuggingFace CLI, downloading the model, signing, verifying,
-and uploading to HuggingFace — see **[docs/SIGNING-GUIDE.md](docs/SIGNING-GUIDE.md)**.
-
-Quick reference (key-based signing):
-
-```bash
-# 1. Set up environment
-python3 -m venv signing-env && source signing-env/bin/activate
-pip3 install huggingface_hub
-
-# 2. Download the model
-hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
-rm -rf ./model-files/.git ./model-files/.gitattributes
-
-# 3. Install model signing
-git clone https://github.com/sigstore/model-transparency
-cd model-transparency && pip3 install . && cd ..
-
-# 4. Generate keys and sign
-openssl ecparam -genkey -name prime256v1 -noout -out signing-key.pem
-openssl ec -in signing-key.pem -pubout -out signing-key.pub
-python3 -m model_signing sign key --private_key signing-key.pem ./model-files
-
-# 5. Verify locally
-python3 -m model_signing verify key \
-    --signature ./model-files/model.sig \
-    --public_key signing-key.pub \
-    ./model-files
-
-# 6. Package as an OCI image and push to a registry
-cat > Containerfile <<EOF
-FROM busybox:latest
-COPY model-files/ /model/
-EOF
-podman build --platform linux/amd64 -t quay.io/yourorg/signed-model:v1 .
-podman push quay.io/yourorg/signed-model:v1
-```
-
-> The helper script `./scripts/sign-model.sh` wraps the keygen, sign, verify, and
-> archive steps. Run `./scripts/sign-model.sh help` for usage.
-
-### Configure in values.yaml
-
-**Key-based verification** (recommended for air-gapped or private models):
-
-```yaml
-signing:
-  enabled: true
-  signaturePath: "model.sig"
-  ignoreGitPaths: true
-  publicKeyData: |
-    -----BEGIN PUBLIC KEY-----
-    <paste contents of signing-key.pub>
-    -----END PUBLIC KEY-----
-```
-
-**Sigstore keyless verification** (ties to an OIDC identity — no key management):
-
-```yaml
-signing:
-  enabled: true
-  signaturePath: "model.sig"
-  ignoreGitPaths: true
-  certificateIdentity: "user@example.com"
-  certificateOidcIssuer: "https://accounts.google.com"
-```
-
-### How It Works on Deploy
-
-On `helm install`:
-
-1. Helm creates the **ModelValidation CR**, **signing-pubkey Secret**,
-   **ServingRuntime**, and **InferenceService**
-2. When the predictor pod is created, the operator's webhook detects the
-   `validation.ml.sigstore.dev/ml` label and injects a `model-validation` init
-   container that inherits all volume mounts from the main containers
-3. The init container runs the verification agent — on success, the pod proceeds
-   to start vLLM; on failure, the pod stays in `Init:Error` and the model is
-   never served
-
-### Helm Resources Created
-
-| Resource | Purpose |
-|---|---|
-| `Secret/model-signing-pubkey` | Public key for verification (key-based only) |
-| `ModelValidation/<name>-validation` | Tells operator how to verify the model |
-| `InferenceService` | Predictor pod with `validation.ml.sigstore.dev/ml` label |
-| `ServingRuntime` | vLLM runtime with PVC + key volume mounts |
-
-### Testing Model Validation
-
-See [Validate model signing](#validate-model-signing) in the Deploy section for
-the full 6-step validation procedure with expected outputs.
-
-### What Happens on Verification Failure
-
-If the model signature is invalid or missing, the init container exits with an
-error. The predictor pod will show `Init:Error` and never start serving:
-
-```bash
-# Check what went wrong
-oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
-
-# Common causes:
-# - model.sig missing from the OCI image
-# - Wrong public key (doesn't match the key used to sign)
-# - Model files modified after signing
-# - Wrong certificateIdentity/certificateOidcIssuer (keyless mode)
-```
+</details>
 
 ## Vector DB Attestation and Integrity (Optional)
+
+<details>
+<summary><strong>Enable and configure vector DB integrity checking</strong></summary>
 
 When `attestation.enabled: true`, the chart creates a baseline SHA-512 hash of the
 LanceDB vector database after document seeding and periodically verifies it hasn't
 been tampered with.
 
-### Enable in values.yaml
+**Enable in values.yaml:**
 
 ```yaml
 attestation:
@@ -507,14 +399,14 @@ attestation:
   vectorDbPath: "/opt/app-root/src/anythingllm/storage/lancedb"
 ```
 
-### How It Works
+**How it works:**
 
 1. **Attestation** (post-install hook): After documents are seeded, a Job computes
    SHA-512 of all LanceDB files and stores the hash in a `vectordb-attestation` ConfigMap.
 2. **Integrity CronJob**: Runs on schedule, re-computes the hash, and compares it
    against the baseline. Results (`PASS`/`FAIL`) are written to the ConfigMap.
 
-### Check Integrity Status
+**Check integrity status:**
 
 ```bash
 oc get configmap vectordb-attestation -n ${PROJECT} -o yaml
@@ -522,20 +414,29 @@ oc get configmap vectordb-attestation -n ${PROJECT} -o yaml
 
 Key fields: `baseline-hash`, `last-check`, `last-result` (`PASS`/`FAIL`/`ERROR`).
 
+</details>
+
 ## Troubleshooting
 
-### Workbench shows "Notebook image deleted"
+<details>
+<summary><strong>Workbench shows "Notebook image deleted"</strong></summary>
 
 The ImageStream `custom-anythingllm` is missing. See [Prerequisites](#3-anythingllm-imagestream-required).
 
-### Workbench not accessible / "no healthy upstream"
+</details>
+
+<details>
+<summary><strong>Workbench not accessible / "no healthy upstream"</strong></summary>
 
 ```bash
 oc get pod anythingllm-0 -n ${PROJECT}           # should show 3/3 Running
 oc get svc -n ${PROJECT}                          # should show anythingllm services
 ```
 
-### vLLM pod not starting
+</details>
+
+<details>
+<summary><strong>vLLM pod not starting</strong></summary>
 
 ```bash
 MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
@@ -544,7 +445,10 @@ oc logs -n ${PROJECT} $(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-p
 oc describe pod -n ${PROJECT} $(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o name)
 ```
 
-### Port-forward or curl fails
+</details>
+
+<details>
+<summary><strong>Port-forward or curl fails</strong></summary>
 
 ```bash
 MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
@@ -554,7 +458,10 @@ POD=$(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o jsonpa
 oc port-forward -n ${PROJECT} pod/${POD} 8080:8080
 ```
 
-### Vector DB integrity check fails
+</details>
+
+<details>
+<summary><strong>Vector DB integrity check fails</strong></summary>
 
 ```bash
 # Check CronJob logs
@@ -568,14 +475,17 @@ If `last-result` is `FAIL`, the vector DB was modified after attestation. This c
 a legitimate document update or an integrity violation. Re-attest after any intentional
 change by deleting and re-running the attestation Job.
 
-### Model validation init container fails
+</details>
+
+<details>
+<summary><strong>Model validation init container fails</strong></summary>
 
 ```bash
 # Check the init container logs
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
 
-# Check the model-download Job
-oc logs -n ${PROJECT} job/model-download
+# Check the storage-initializer (model download)
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializer
 
 # Check the ModelValidation CR
 oc get modelvalidation -n ${PROJECT} -o yaml
@@ -591,7 +501,10 @@ Common causes: Model Validation Operator not installed, unsigned model, missing
 `model.sig`, wrong public key, wrong certificate identity/issuer (keyless mode),
 or model files modified after signing.
 
-### Operator webhook not injecting init container
+</details>
+
+<details>
+<summary><strong>Operator webhook not injecting init container</strong></summary>
 
 If the predictor pod starts without a `model-validation` init container:
 
@@ -609,7 +522,10 @@ oc get namespace ${PROJECT} -o jsonpath='{.metadata.labels}' | grep -o 'validati
 oc get mutatingwebhookconfiguration | grep validation
 ```
 
-### Storage issues
+</details>
+
+<details>
+<summary><strong>Storage issues</strong></summary>
 
 ```bash
 oc get storageclass
@@ -619,26 +535,37 @@ oc describe pvc anythingllm -n ${PROJECT}
 
 Update `storageClassName` in [`helm/values.yaml`](helm/values.yaml) if needed.
 
+</details>
+
 ## References
 
-**Supply Chain Security:**
+<details>
+<summary><strong>Supply Chain Security</strong></summary>
 
 - Model Validation Operator: [sigstore/model-validation-operator](https://github.com/sigstore/model-validation-operator)
 - Model signing: [sigstore/model-transparency](https://github.com/sigstore/model-transparency)
 - Sigstore: [sigstore.dev](https://www.sigstore.dev)
 
-**Runtime & Infrastructure:**
+</details>
+
+<details>
+<summary><strong>Runtime & Infrastructure</strong></summary>
 
 - Runtime: [vLLM CPU](https://docs.vllm.ai/en/latest/getting_started/installation/cpu.html)
 - Runtime image: [quay.io/rh-aiservices-bu/vllm-cpu-openai-ubi9](https://quay.io/repository/rh-aiservices-bu/vllm-cpu-openai-ubi9)
 - Runtime code: [github.com/rh-aiservices-bu/llm-on-openshift](https://github.com/rh-aiservices-bu/llm-on-openshift/tree/main/serving-runtimes/vllm_runtime)
 - AnythingLLM: [Mintplex-Labs/anything-llm](https://github.com/Mintplex-Labs/anything-llm)
 
-**Fork Information:**
+</details>
+
+<details>
+<summary><strong>Fork Information</strong></summary>
 
 - Original: [rh-ai-quickstart/llm-cpu-serving](https://github.com/rh-ai-quickstart/llm-cpu-serving)
 - This fork: [rocrisp/llm-cpu-serving](https://github.com/rocrisp/llm-cpu-serving)
 - Changelog: [CHANGES.md](CHANGES.md)
+
+</details>
 
 ## Tags
 
