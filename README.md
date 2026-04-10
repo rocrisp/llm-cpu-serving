@@ -140,15 +140,9 @@ oc get crd modelvalidations.ml.sigstore.dev
 
 #### 6. Model
 
-Models can be deployed through any Kserve-supported storage transport,
-including Huggingface and S3-compatible storage. By default, the Huggingface
-model `hf://Qwen/Qwen2.5-0.5B-Instruct` is used.
-
-You can set the storage URI for a desired model through `models.storageUri`.
-
-If you are deploying a signed model, you can enable verification at runtime
-by setting `signing.enabled` to true. More options for the runtime validation
-are available below.
+The model must be signed and uploaded to HuggingFace before deployment.
+Follow the [Signing Guide](docs/SIGNING-GUIDE.md) for the complete workflow.
+The signed model is referenced at [install time](#install-with-helm) via `--set model.storageUri`.
 
 ### Clone
 
@@ -179,8 +173,13 @@ oc new-project ${PROJECT}
 ### Install with Helm
 
 ```bash
-helm install ${PROJECT} helm/ --namespace ${PROJECT}
+helm install ${PROJECT} helm/ --namespace ${PROJECT} \
+    --set signing.enabled=true \
+    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model
 ```
+
+Replace `YOUR_HF_USERNAME` with the HuggingFace username you used when
+uploading the signed model in the [Signing Guide](docs/SIGNING-GUIDE.md).
 
 Helm executes in this order:
 
@@ -311,7 +310,7 @@ To use a different model, you must sign it, package it as an OCI image, and upda
 1. **Sign and package the new model** (see [Sign a Model](#sign-a-model)):
 
 ```bash
-huggingface-cli download <org>/<model-name> --local-dir ./model-files
+hf download <org>/<model-name> --local-dir ./model-files
 ./scripts/sign-model.sh sign ./model-files --key signing-key.pem
 podman build --platform linux/amd64 -t quay.io/yourorg/<model-name>-signed:v1 .
 podman push quay.io/yourorg/<model-name>-signed:v1
@@ -382,31 +381,37 @@ helm install
 
 ### Sign a Model
 
-Requires: `pip install model-signing` ([sigstore/model-transparency](https://github.com/sigstore/model-transparency))
+For the complete step-by-step guide — including virtual environment setup,
+installing the HuggingFace CLI, downloading the model, signing, verifying,
+and uploading to HuggingFace — see **[docs/SIGNING-GUIDE.md](docs/SIGNING-GUIDE.md)**.
+
+Quick reference (key-based signing):
 
 ```bash
-# 1. Download the model locally
-huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
+# 1. Set up environment
+python3 -m venv signing-env && source signing-env/bin/activate
+pip3 install huggingface_hub
 
-# 2. Generate a signing key pair
+# 2. Download the model
+hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir ./model-files
+rm -rf ./model-files/.git ./model-files/.gitattributes
+
+# 3. Install model signing
+git clone https://github.com/sigstore/model-transparency
+cd model-transparency && pip3 install . && cd ..
+
+# 4. Generate keys and sign
 openssl ecparam -genkey -name prime256v1 -noout -out signing-key.pem
 openssl ec -in signing-key.pem -pubout -out signing-key.pub
+python3 -m model_signing sign key --private_key signing-key.pem ./model-files
 
-# 3. Sign the model with your private key
-python3 -m model_signing sign key \
-    --private_key signing-key.pem \
-    --signature ./model-files/model.sig \
-    --ignore-git-paths \
-    ./model-files
-
-# 4. Verify locally
+# 5. Verify locally
 python3 -m model_signing verify key \
-    --public_key signing-key.pub \
     --signature ./model-files/model.sig \
-    --ignore-git-paths \
+    --public_key signing-key.pub \
     ./model-files
 
-# 5. Package as an OCI image and push to a registry
+# 6. Package as an OCI image and push to a registry
 cat > Containerfile <<EOF
 FROM busybox:latest
 COPY model-files/ /model/
