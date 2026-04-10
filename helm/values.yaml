@@ -81,8 +81,10 @@ signing:
   # Path to the signature file relative to model root
   signaturePath: "model.sig"
   # Sigstore keyless verification (OIDC identity-based) — used when publicKeyData is empty
-  certificateIdentity: ""
-  certificateOidcIssuer: ""
+  certificateIdentity: "caxu@redhat.com"
+  certificateOidcIssuer: "https://github.com/login/oauth"
+  # PEM-encoded public key for key-based verification
+  publicKeyData: ""
   # Ignore git metadata files during verification
   ignoreGitPaths: true
   # Other paths to be ignored during verification

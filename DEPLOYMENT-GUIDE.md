@@ -323,8 +323,8 @@ signing:
 # Check the init container verification
 oc logs -n hr-assistant -l serving.kserve.io/inferenceservice -c model-validation
 
-# Check the download Job
-oc logs -n hr-assistant job/model-download
+# Check the storage initializer (model download)
+oc logs -n hr-assistant -l serving.kserve.io/inferenceservice -c storage-initializer
 
 # Check operator logs
 oc logs -n model-validation-operator-system deployment/model-validation-controller-manager --tail=20

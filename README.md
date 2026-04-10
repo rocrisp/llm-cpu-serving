@@ -267,21 +267,21 @@ PROJECT="hr-assistant"
 MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
 
 # Step 1: Confirm that Kserve downloaded the model
-echo "=== Step 3: Model downloaded ==="
+echo "=== Step 1: Model downloaded ==="
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializer
 
 # Step 2: Check verification succeeded
-echo "=== Step 4: Verification result ==="
+echo "=== Step 2: Verification result ==="
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
 # Expected: "Verification succeeded"
 
 # Step 3: Confirm model is loaded
-echo "=== Step 5: Model source ==="
+echo "=== Step 3: Model source ==="
 oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c kserve-container | head -5
-# Expected: model path shows /data/signed-model
+# Expected: model path shows /mnt/models
 
 # Step 4: Test inference through the verified model
-echo "=== Step 6: Inference test ==="
+echo "=== Step 4: Inference test ==="
 oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
     curl -s http://${MODEL_NAME}-cpu-predictor:8080/v1/chat/completions \
     -H 'Content-Type: application/json' \
@@ -366,17 +366,17 @@ The deployment flow is:
 helm install
     |
     v
-[PVC created] --> [ModelValidation CR] <--- created by Helm
-                  [InferenceService]   <--- label: validation.ml.sigstore.dev/ml
-                                                |
-                                                v
-                  [Operator Webhook] -------> injects init container
-                                                |
-                                                v
-                  [model-validation init] --> verifies signature
-                                                |  (pass)
-                                                v
-                  [kserve-container]   -------> loads model from /data/signed-model
+[ModelValidation CR] <--- created by Helm
+[InferenceService]   <--- label: validation.ml.sigstore.dev/ml
+                               |
+                               v
+[Operator Webhook] -------> injects init container
+                               |
+                               v
+[model-validation init] --> verifies signature at /mnt/models
+                               |  (pass)
+                               v
+[kserve-container]   -------> loads model from /mnt/models
 ```
 
 ### Sign a Model
