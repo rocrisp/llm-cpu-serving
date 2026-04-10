@@ -79,7 +79,11 @@ Example AWS instance: [m6i.4xlarge](https://instances.vantage.sh/aws/ec2/m6i.4xl
 oc get gateway data-science-gateway -n openshift-ingress
 ```
 
-Expected output should show the gateway in `PROGRAMMED` state.
+Expected output (`PROGRAMMED: True`):
+
+<pre><code>NAME                   CLASS                        ADDRESS                                                                               PROGRAMMED   AGE
+data-science-gateway   data-science-gateway-class   data-science-gateway-data-science-gateway-class.openshift-ingress.svc.cluster.local   True         48m
+</code></pre>
 
 </details>
 
@@ -128,30 +132,28 @@ Verify your cluster has a compatible storage class. Update `storageClassName` in
 oc get storageclass
 ```
 
-Common storage class names:
-
-- OpenShift Container Storage: `ocs-external-storagecluster-ceph-rbd` (default)
-- AWS EBS: `gp3-csi`, `gp2`
-- Azure Disk: `managed-premium`
-- GCP PD: `standard-rwo`
-
 </details>
 
 <details>
 <summary><strong>5. Model Validation Operator</strong></summary>
 
-Install the operator that enforces model signature verification:
+Install the **Model Validation Operator** (provided by Red Hat) from the
+OpenShift OperatorHub:
 
-```bash
-oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm
-```
+1. In the OpenShift console, go to **Operators** → **OperatorHub**
+2. Search for **Model Validation Operator**
+3. Click **Install** and accept the defaults
 
 Verify it's running:
 
 ```bash
-oc get pods -n model-validation-operator-system
-oc get crd modelvalidations.ml.sigstore.dev
+oc get pods -n openshift-operators | grep model-validation-controller-manager
 ```
+
+Expected output:
+
+<pre><code>model-validation-controller-manager-b8bf7c8cb-gw4zw   1/1     Running   0   2m
+</code></pre>
 
 </details>
 
@@ -203,8 +205,7 @@ helm install ${PROJECT} helm/ --namespace ${PROJECT} \
 ```
 
 Replace `YOUR_HF_USERNAME` with the HuggingFace username and `YOUR_EMAIL` with
-the identity you used when signing the model in the
-[Signing Guide](docs/SIGNING-GUIDE.md).
+the identity you used when signing the model.
 
 <details>
 <summary><strong>Verification mode options</strong></summary>
@@ -216,18 +217,6 @@ the identity you used when signing the model in the
 | GitHub | `https://github.com/login/oauth` |
 | Google | `https://accounts.google.com` |
 | Microsoft | `https://login.microsoftonline.com` |
-
-**Key-based verification** — for air-gapped or private models, pass the public key
-instead of an OIDC identity:
-
-```bash
-helm install ${PROJECT} helm/ --namespace ${PROJECT} \
-    --set signing.enabled=true \
-    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model \
-    --set-file signing.publicKeyData=signing-key.pub
-```
-
-See [`helm/values.yaml`](helm/values.yaml) for all signing options.
 
 </details>
 
@@ -248,100 +237,119 @@ oc -n ${PROJECT} get pods -w
 <summary><strong>Expected output</strong></summary>
 
 ```
-NAME                                            READY   STATUS      RESTARTS   AGE
-anythingllm-0                                   3/3     Running     0          2m
-anythingllm-seed-xxxxx                          0/1     Completed   0          2m
-<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      0/3     Init:1/2    0          30s    <-- verifying signature
-<model-name>-cpu-predictor-xxxxxxxxx-xxxxx      2/2     Running     0          90s    <-- verification passed
+NAME                                       READY   STATUS      RESTARTS        AGE
+anythingllm-0                              3/3     Running     1 (2m6s ago)    43m
+anythingllm-seed-9rd6x                     0/1     Completed   0               43m
+qwen25-05b-cpu-predictor-dcc6f94d-cms6s    1/1     Running     0               5m
 ```
 
-The `Init:1/2` phase is the Model Validation Operator's init container verifying
-the cryptographic signature. Once it passes, the pod transitions to `Running`.
-If verification fails, the pod stays in `Init:Error` and the model is never served.
 
 </details>
 
 ### Test
 
-#### Access the UI
-
-```bash
-oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}' && echo
-```
-
-Navigate to **Projects** → **hr-assistant** → open the **AnythingLLM** workbench → click the **Assistant to the HR Representative** workspace.
-
-![OpenShift AI Projects](docs/images/rhoai-1.png)
-
-![OpenShift AI Projects](docs/images/rhoai-2.png)
-
-**Direct Access URL:**
+**Access the app:**
 
 ```bash
 echo "https://$(oc get route data-science-gateway -n openshift-ingress -o jsonpath='{.spec.host}')/notebook/${PROJECT}/anythingllm/"
 ```
 
 <details>
-<summary><strong>Test the API directly</strong></summary>
+<summary><strong>Validate model download and signature verification</strong></summary>
 
 ```bash
-MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
+PROJECT="hr-assistant"
 
-# Port-forward to the vLLM pod (keep running in one terminal)
-POD=$(oc get pod -n ${PROJECT} -l app=isvc.${MODEL_NAME}-cpu-predictor -o jsonpath='{.items[0].metadata.name}')
-oc port-forward -n ${PROJECT} pod/${POD} 8080:8080
+# Step 1: Verify the predictor pod has the validation label. When signing.enabled=true,
+# the Helm chart adds this label to the InferenceService predictor spec
+# (see helm/templates/inferenceservice.yaml). The Model Validation Operator's
+# mutating webhook watches for pods with this label and injects a model-validation
+# init container that verifies the model signature before the pod can start.
+# The label value matches the ModelValidation CR name.
+echo "=== Step 1: Validation label ==="
+oc get pods -n ${PROJECT} -l serving.kserve.io/inferenceservice --show-labels | grep validation
+# Expected: validation.ml.sigstore.dev/ml=qwen25-05b-validation
 
-# In another terminal, test the chat completions endpoint
-curl -s http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"model\": \"${MODEL_NAME}\",
-    \"messages\": [
-      {\"role\": \"user\", \"content\": \"What is HR compliance?\"}
-    ],
-    \"max_tokens\": 100
-  }" | python3 -m json.tool
+# Step 2: Confirm KServe downloaded the signed model from HuggingFace
+echo "=== Step 2: Model downloaded ==="
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializer | tail -2
+# Expected:
+#   Successfully copied hf://rosebot/signed-model to /mnt/models
+#   Model downloaded in NN seconds.
+
+# Step 3: Confirm model-validation init container passed
+echo "=== Step 3: Model validation ==="
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
+# Expected:
+#   Verifying: /mnt/models
+#   Signature: /mnt/models/model.sig
+#
+#   The following checks were performed:
+#     - Signature verified against Sigstore bundle
+#     - Signing identity matched
+#     - OIDC issuer matched
+#
+#   Verification succeeded
+
+# Step 4: Confirm vLLM is serving
+echo "=== Step 4: vLLM ready ==="
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c kserve-container | tail -3
+# Expected:
+#   INFO:     Started server process [1]
+#   INFO:     Waiting for application startup.
+#   INFO:     Application startup complete.
+
 ```
 
-Expected: a JSON response with `choices[0].message.content` containing the model's answer.
+All steps passing confirms: KServe downloaded the signed model, the operator
+injected the verification init container, the signature was verified, and
+vLLM is serving.
 
 </details>
 
 <details>
-<summary><strong>Validate model signing (end-to-end check)</strong></summary>
+<summary><strong>What happens when the model is tampered with</strong></summary>
 
-Run these checks after deploying to confirm the signing and verification flow:
+To verify that model signing actually protects against unauthorized changes,
+edit any file in the signed model repo directly on HuggingFace — for example,
+modify the `LICENSE` file at
+`https://huggingface.co/YOUR_HF_USERNAME/signed-model/blob/main/LICENSE`.
+
+Then delete the predictor pod to force KServe to re-download the modified model:
 
 ```bash
 PROJECT="hr-assistant"
-MODEL_NAME=$(grep '^  name:' helm/values.yaml | awk '{print $2}' | tr -d '"')
-
-# Step 1: Confirm that Kserve downloaded the model
-echo "=== Step 1: Model downloaded ==="
-oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializer
-
-# Step 2: Check verification succeeded
-echo "=== Step 2: Verification result ==="
-oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
-# Expected: "Verification succeeded"
-
-# Step 3: Confirm model is loaded
-echo "=== Step 3: Model source ==="
-oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c kserve-container | head -5
-# Expected: model path shows /mnt/models
-
-# Step 4: Test inference through the verified model
-echo "=== Step 4: Inference test ==="
-oc exec -n ${PROJECT} anythingllm-0 -c anythingllm -- \
-    curl -s http://${MODEL_NAME}-cpu-predictor:8080/v1/chat/completions \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"${MODEL_NAME}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":30}"
-# Expected: JSON response with choices[0].message.content
+oc delete pod -n ${PROJECT} -l serving.kserve.io/inferenceservice
 ```
 
-All steps passing confirms: the signed model was downloaded, the operator
-injected the verification init container, the signature was verified, and the
-model is serving traffic through the verified path.
+The new pod will get stuck in `Init:CrashLoopBackOff` because the downloaded
+file no longer matches the hash in the original signature. Check the
+model-validation container logs:
+
+```bash
+oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c model-validation
+```
+
+Expected output:
+
+```
+Verifying: /mnt/models
+Signature: /mnt/models/model.sig
+Verification failed:
+Hash mismatches (1):
+LICENSE: expected Digest(algorithm..., got Digest(algorithm...
+```
+
+The model-validation init container blocks the pod from starting because the
+file hash for `LICENSE` no longer matches what was recorded when the model was
+signed. This proves the Model Validation Operator detects any post-signing
+modification and prevents tampered models from being served.
+
+To restore, revert the change on HuggingFace and delete the pod again:
+
+```bash
+oc delete pod -n ${PROJECT} -l serving.kserve.io/inferenceservice
+```
 
 </details>
 
@@ -491,10 +499,10 @@ oc logs -n ${PROJECT} -l serving.kserve.io/inferenceservice -c storage-initializ
 oc get modelvalidation -n ${PROJECT} -o yaml
 
 # Check the operator webhook logs
-oc logs -n model-validation-operator-system deployment/model-validation-controller-manager --tail=30
+oc logs -n openshift-operators deployment/model-validation-controller-manager --tail=30
 
 # Verify the operator is running
-oc get pods -n model-validation-operator-system
+oc get pods -n openshift-operators | grep model-validation
 ```
 
 Common causes: Model Validation Operator not installed, unsigned model, missing

@@ -151,20 +151,21 @@ echo ""
 echo "Checking Model Validation Operator..."
 if oc get crd modelvalidations.ml.sigstore.dev &>/dev/null; then
     print_success "Model Validation Operator CRD installed"
-    MVO_NS="model-validation-operator-system"
-    if oc get deployment model-validation-controller-manager -n "$MVO_NS" &>/dev/null; then
-        MVO_READY=$(oc get deployment model-validation-controller-manager -n "$MVO_NS" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
-        if [ "${MVO_READY:-0}" -gt 0 ]; then
-            print_success "Model Validation Operator is running ($MVO_READY replicas)"
+    MVO_NS="openshift-operators"
+    if oc get pods -n "$MVO_NS" -l control-plane=controller-manager --no-headers 2>/dev/null | grep -q model-validation; then
+        MVO_RUNNING=$(oc get pods -n "$MVO_NS" --no-headers 2>/dev/null | grep model-validation-controller-manager | grep Running | wc -l | tr -d ' ')
+        if [ "${MVO_RUNNING:-0}" -gt 0 ]; then
+            print_success "Model Validation Operator is running in $MVO_NS ($MVO_RUNNING pod(s))"
         else
-            print_warning "Model Validation Operator deployment exists but has no ready replicas"
+            print_warning "Model Validation Operator pod found in $MVO_NS but not Running"
         fi
     else
-        print_warning "Model Validation Operator deployment not found in $MVO_NS"
+        print_warning "Model Validation Operator pod not found in $MVO_NS"
+        echo "  Install from OperatorHub: Operators → OperatorHub → search 'Model Validation Operator'"
     fi
 else
     print_failure "Model Validation Operator not installed (required for model signing)"
-    echo "  Install: oc apply -k https://github.com/sigstore/model-validation-operator/config/overlays/olm"
+    echo "  Install from OperatorHub: Operators → OperatorHub → search 'Model Validation Operator'"
 fi
 echo ""
 

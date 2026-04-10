@@ -14,5 +14,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
+  {{- if .Values.storageClassName }}
   storageClassName: {{ .Values.storageClassName }}
+  {{- end }}
   volumeMode: Filesystem

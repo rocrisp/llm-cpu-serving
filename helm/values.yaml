@@ -56,7 +56,7 @@ images:
     tag: "1.9.1"
 
 model:
-  storageUri: "hf://Qwen/Qwen2.5-0.5B-Instruct"
+  storageUri: "hf://rosebot/signed-model"
   name: "qwen25-05b"
   maxModelLen: 2048
 
@@ -69,7 +69,7 @@ resources:
       cpu: "8"
       memory: "8Gi"
 
-storageClassName: gp3-csi
+storageClassName: ""
 
 attestation:
   enabled: false
@@ -81,8 +81,8 @@ signing:
   # Path to the signature file relative to model root
   signaturePath: "model.sig"
   # Sigstore keyless verification (OIDC identity-based) — used when publicKeyData is empty
-  certificateIdentity: "caxu@redhat.com"
-  certificateOidcIssuer: "https://github.com/login/oauth"
+  certificateIdentity: ""
+  certificateOidcIssuer: ""
   # PEM-encoded public key for key-based verification
   publicKeyData: ""
   # Ignore git metadata files during verification
