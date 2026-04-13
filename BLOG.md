@@ -96,26 +96,7 @@ for the end-to-end workflow.
 Two steps to go from zero to a running HR assistant:
 
 1. **Download, sign, and upload the model** — Download a model from HuggingFace, sign it with Sigstore (keyless OIDC), and push it to your HuggingFace repository. See the [Signing Guide](docs/SIGNING-GUIDE.md).
-
 2. **Deploy** — Clone the repo and run `helm install` with your model URI and signing identity. See [README.md](README.md) for prerequisites and deployment steps.
-
-```bash
-git clone https://github.com/opdev/llm-cpu-serving.git && cd llm-cpu-serving/
-oc new-project hr-assistant
-
-helm install hr-assistant helm/ --namespace hr-assistant \
-    --set signing.enabled=true \
-    --set model.storageUri=hf://YOUR_HF_USERNAME/signed-model \
-    --set signing.certificateIdentity="YOUR_EMAIL" \
-    --set signing.certificateOidcIssuer="https://github.com/login/oauth"
-```
-
-   | Flag | Purpose |
-   |------|---------|
-   | `signing.enabled=true` | Enables model signature verification via the Model Validation Operator |
-   | `model.storageUri` | HuggingFace repo where the signed model is hosted; KServe downloads it at pod startup |
-   | `signing.certificateIdentity` | Email address of the person who signed the model (must match the OIDC identity used during signing) |
-   | `signing.certificateOidcIssuer` | The OIDC provider used for signing (e.g., GitHub, Google) |
 
 ---
 
@@ -168,22 +149,26 @@ These are prototyping scenarios — validating the concept before committing to
 GPU. The domain knowledge comes from uploaded documents and the system prompt,
 not the model. Swap those for a different use case:
 
-| Use Case | Documents | System Prompt Focus |
-|----------|-----------|-------------------|
-| HR policy assistant | Handbooks, FMLA guides | Regulated HR |
-| IT support | Runbooks, architecture docs | Triage procedures |
-| Customer support | Product manuals, FAQs | Accurate responses |
-| Legal research | Contracts, compliance docs | Flag issues |
+
+| Use Case            | Documents                   | System Prompt Focus |
+| ------------------- | --------------------------- | ------------------- |
+| HR policy assistant | Handbooks, FMLA guides      | Regulated HR        |
+| IT support          | Runbooks, architecture docs | Triage procedures   |
+| Customer support    | Product manuals, FAQs       | Accurate responses  |
+| Legal research      | Contracts, compliance docs  | Flag issues         |
+
 
 ---
 
 ## What does it cost?
 
-| Approach | Relative cost | Latency | Quality | Data egress | Best for |
-|----------|--------------|---------|---------|-------------|----------|
-| **Cloud API** (OpenAI, etc.) | Low upfront, ongoing per-use | 1-2s | High (large models) | Yes — data leaves your network | Fastest path to production quality |
-| **GPU self-hosted** | High upfront (hardware + power) | 1-2s | High | None at runtime | Production workloads, on-prem requirement |
-| **CPU self-hosted** (this project) | Near-zero (existing infra) | 20-30s | Low-medium (small models only) | None at runtime | Development, prototyping, data-sovereign environments |
+
+| Approach                           | Relative cost                   | Latency | Quality                        | Data egress                    | Best for                                              |
+| ---------------------------------- | ------------------------------- | ------- | ------------------------------ | ------------------------------ | ----------------------------------------------------- |
+| **Cloud API** (OpenAI, etc.)       | Low upfront, ongoing per-use    | 1-2s    | High (large models)            | Yes — data leaves your network | Fastest path to production quality                    |
+| **GPU self-hosted**                | High upfront (hardware + power) | 1-2s    | High                           | None at runtime                | Production workloads, on-prem requirement             |
+| **CPU self-hosted** (this project) | Near-zero (existing infra)      | 20-30s  | Low-medium (small models only) | None at runtime                | Development, prototyping, data-sovereign environments |
+
 
 The cost advantage of CPU is that you're using already-provisioned capacity.
 The trade-off: slow responses, small models, and no path to scale. If the
@@ -195,12 +180,14 @@ pipeline all carry over to a GPU deployment.
 
 ## What if something goes wrong?
 
-| Symptom | Common Cause |
-|---------|-------------|
+
+| Symptom                 | Common Cause                                                         |
+| ----------------------- | -------------------------------------------------------------------- |
 | `Init:CrashLoopBackOff` | Signature mismatch, wrong `certificateIdentity`, missing `model.sig` |
-| Pod `Pending` | Unbound PVC or insufficient resources |
-| Slow responses (>60s) | Not enough CPUs allocated |
-| `ImagePullBackOff` | Registry unreachable or wrong image tag |
+| Pod `Pending`           | Unbound PVC or insufficient resources                                |
+| Slow responses (>60s)   | Not enough CPUs allocated                                            |
+| `ImagePullBackOff`      | Registry unreachable or wrong image tag                              |
+
 
 See [README.md](README.md) for detailed troubleshooting commands.
 
@@ -208,14 +195,14 @@ See [README.md](README.md) for detailed troubleshooting commands.
 
 ## References
 
-- **This project:** https://github.com/opdev/llm-cpu-serving
-- **Sigstore Model Validation Operator:** https://github.com/sigstore/model-validation-operator
-- **Sigstore Model Transparency:** https://github.com/sigstore/model-transparency
-- **vLLM:** https://docs.vllm.ai/ | [CPU support](https://docs.vllm.ai/en/latest/getting_started/installation/cpu.html)
-- **KServe:** https://kserve.github.io/website/
-- **AnythingLLM:** https://github.com/Mintplex-Labs/anything-llm
-- **Qwen2.5-0.5B-Instruct:** https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct
-- **OpenShift AI:** https://www.redhat.com/en/technologies/cloud-computing/openshift/openshift-ai
+- **This project:** [https://github.com/opdev/llm-cpu-serving](https://github.com/opdev/llm-cpu-serving)
+- **Sigstore Model Validation Operator:** [https://github.com/sigstore/model-validation-operator](https://github.com/sigstore/model-validation-operator)
+- **Sigstore Model Transparency:** [https://github.com/sigstore/model-transparency](https://github.com/sigstore/model-transparency)
+- **vLLM:** [https://docs.vllm.ai/](https://docs.vllm.ai/) | [CPU support](https://docs.vllm.ai/en/latest/getting_started/installation/cpu.html)
+- **KServe:** [https://kserve.github.io/website/](https://kserve.github.io/website/)
+- **AnythingLLM:** [https://github.com/Mintplex-Labs/anything-llm](https://github.com/Mintplex-Labs/anything-llm)
+- **Qwen2.5-0.5B-Instruct:** [https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
+- **OpenShift AI:** [https://www.redhat.com/en/technologies/cloud-computing/openshift/openshift-ai](https://www.redhat.com/en/technologies/cloud-computing/openshift/openshift-ai)
 
 ---
 
