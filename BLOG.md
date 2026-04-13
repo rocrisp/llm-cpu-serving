@@ -1,4 +1,4 @@
-# On-Cluster LLM Inference with Sigstore Model Signing on OpenShift AI
+# In-Cluster LLM Inference with Sigstore Model Signing on OpenShift AI
 
 *CPU-based inference for development and prototyping on OpenShift AI*
 
