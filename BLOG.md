@@ -68,6 +68,8 @@ running, nothing leaves. For environments that require true air-gapping
 or served from an internal storage endpoint, eliminating the last external
 connection.
 
+<br>
+
 **2. Only verified models are served.** Without signing, anyone with write
 access to the model repository could modify weights or alter behavior, and
 the deployment pipeline would serve it without question. The
@@ -96,6 +98,7 @@ for the end-to-end workflow.
 Two steps to go from zero to a running HR assistant:
 
 1. **Download, sign, and upload the model** — Download a model from HuggingFace, sign it with Sigstore (keyless OIDC), and push it to your HuggingFace repository. See the [Signing Guide](docs/SIGNING-GUIDE.md).
+
 2. **Deploy** — Clone the repo and run `helm install` with your model URI and signing identity. See [README.md](README.md) for prerequisites and deployment steps.
 
 ---
@@ -149,7 +152,6 @@ These are prototyping scenarios — validating the concept before committing to
 GPU. The domain knowledge comes from uploaded documents and the system prompt,
 not the model. Swap those for a different use case:
 
-
 | Use Case            | Documents                   | System Prompt Focus |
 | ------------------- | --------------------------- | ------------------- |
 | HR policy assistant | Handbooks, FMLA guides      | Regulated HR        |
@@ -157,18 +159,15 @@ not the model. Swap those for a different use case:
 | Customer support    | Product manuals, FAQs       | Accurate responses  |
 | Legal research      | Contracts, compliance docs  | Flag issues         |
 
-
 ---
 
 ## What does it cost?
-
 
 | Approach                           | Relative cost                   | Latency | Quality                        | Data egress                    | Best for                                              |
 | ---------------------------------- | ------------------------------- | ------- | ------------------------------ | ------------------------------ | ----------------------------------------------------- |
 | **Cloud API** (OpenAI, etc.)       | Low upfront, ongoing per-use    | 1-2s    | High (large models)            | Yes — data leaves your network | Fastest path to production quality                    |
 | **GPU self-hosted**                | High upfront (hardware + power) | 1-2s    | High                           | None at runtime                | Production workloads, on-prem requirement             |
 | **CPU self-hosted** (this project) | Near-zero (existing infra)      | 20-30s  | Low-medium (small models only) | None at runtime                | Development, prototyping, data-sovereign environments |
-
 
 The cost advantage of CPU is that you're using already-provisioned capacity.
 The trade-off: slow responses, small models, and no path to scale. If the
@@ -180,14 +179,12 @@ pipeline all carry over to a GPU deployment.
 
 ## What if something goes wrong?
 
-
 | Symptom                 | Common Cause                                                         |
 | ----------------------- | -------------------------------------------------------------------- |
 | `Init:CrashLoopBackOff` | Signature mismatch, wrong `certificateIdentity`, missing `model.sig` |
 | Pod `Pending`           | Unbound PVC or insufficient resources                                |
 | Slow responses (>60s)   | Not enough CPUs allocated                                            |
 | `ImagePullBackOff`      | Registry unreachable or wrong image tag                              |
-
 
 See [README.md](README.md) for detailed troubleshooting commands.
 
@@ -206,5 +203,4 @@ See [README.md](README.md) for detailed troubleshooting commands.
 
 ---
 
-*Questions or feedback? Open an issue on
-[GitHub](https://github.com/opdev/llm-cpu-serving/issues).*
+*Questions or feedback? Open an issue on [GitHub](https://github.com/opdev/llm-cpu-serving/issues).*
