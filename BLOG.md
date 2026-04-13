@@ -1,6 +1,6 @@
 # In-Cluster LLM Inference with Sigstore Model Signing on OpenShift AI
 
-***CPU-based inference** for development and prototyping on OpenShift AI*
+*Model integrity is a supply chain problem that requires the same rigor as container image signing.*
 
 ---
 
@@ -62,7 +62,7 @@ flow, and container architecture.
 
 This project addresses two security concerns:
 
-**1. No data egress at runtime.** After the initial model download, the  
+**1. No data leaves the cluster while the model is running.** After the initial model download, the  
 entire inference pipeline runs in-cluster with zero external calls. No  
 telemetry, no phone-home, no external API dependency at runtime. Questions,  
 documents, embeddings, and responses stay within your infrastructure.
@@ -78,9 +78,7 @@ connection.
 access to the model repository could modify weights or alter behavior, and
 the deployment pipeline would serve it without question. 
 
-The [Model Validation Operator](https://github.com/sigstore/model-validation-operator) blocks any model that hasn't been cryptographically signed and verified. 
-
-This is a supply chain problem that requires the same rigor as container image signing.
+The [Model Validation Operator](https://github.com/sigstore/model-validation-operator) blocks any model that hasn't been cryptographically signed and verified.
 
 ---
 
