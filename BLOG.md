@@ -4,63 +4,31 @@
 
 ---
 
-## Introduction
+## What is this?
 
-If you already have an OpenShift cluster with OpenShift AI, you can run
-an LLM application on CPU without waiting for GPU hardware. CPU inference is
-slow and limited to small models, but it lets you build and validate the full
-stack (RAG pipeline, model signing, deployment automation) on existing
-infrastructure while GPU procurement is in progress.
+An HR policy assistant deployed on OpenShift AI with a single `helm install`:
 
-This guide covers how to deploy an HR policy assistant using
-**Qwen2.5-0.5B-Instruct** via vLLM, AnythingLLM for RAG-based chat, and
-Sigstore's [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
-for model integrity verification. It deploys with a single `helm install`.
+- **[Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)** — small LLM served by vLLM on CPU
+- **[AnythingLLM](https://github.com/Mintplex-Labs/anything-llm)** — RAG-based chat with document upload and citations
+- **[Sigstore Model Validation Operator](https://github.com/sigstore/model-validation-operator)** — cryptographic model integrity verification
 
-What the deployment includes:
+No data leaves the cluster at runtime — all inference runs on-cluster.
 
-- CPU-based LLM inference via KServe on existing worker nodes (slow — expect 20-30s responses)
-- No data egress at runtime — once the model is downloaded, all inference runs on-cluster
-- RAG chat interface with document upload and source citations
-- Cryptographic model signing and verification using Sigstore
-- Helm chart that manages everything in one namespace
-
-> **New to some of these topics?** Here are good starting points:
-> - **Kubernetes:** [Kubernetes Basics Tutorial](https://kubernetes.io/docs/tutorials/kubernetes-basics/)
-> - **OpenShift:** [OpenShift Interactive Learning](https://developers.redhat.com/learn)
-> - **LLMs and inference:** [Intro to Large Language Models](https://www.youtube.com/watch?v=osKyvYJ3PRM) (Andrej Karpathy)
-> - **RAG systems:** [Contextual Retrieval](https://www.anthropic.com/index/contextual-retrieval) (Anthropic)
+> **New to some of these topics?**
+> [Kubernetes Basics](https://kubernetes.io/docs/tutorials/kubernetes-basics/) |
+> [OpenShift Learning](https://developers.redhat.com/learn) |
+> [Intro to LLMs](https://www.youtube.com/watch?v=osKyvYJ3PRM) (Karpathy) |
+> [RAG Overview](https://www.anthropic.com/index/contextual-retrieval) (Anthropic)
 
 ---
 
 ## Why run an LLM on CPU?
 
-An OpenShift cluster with OpenShift AI already has KServe, the operator
-framework, OAuth, RBAC, persistent storage, and a container runtime. That's
-everything needed to serve an LLM. The only addition is a Helm chart and a
-model. The goal is to start building now on what you already have.
-
-GPU inference is 10-20x faster. A response that takes 1-2 seconds on GPU
-takes 20-30 seconds on CPU. For **development and prototyping** — building
-the application, testing the RAG pipeline, iterating on prompts, validating
-the signing workflow — CPU inference lets you move forward without waiting
-for GPU procurement or cloud budget approval.
-
-The default model is [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
-— 500M parameters, ~1GB on disk, 2-3 tokens/second on CPU with float32.
-It works for RAG workloads where the model answers from retrieved document
-context, but don't expect strong reasoning or nuanced answers. To switch
-models, change `--set model.storageUri` during `helm install`.
-
-| Model | Parameters | CPU Speed |
-|-------|-----------|-----------|
-| Qwen2.5-0.5B-Instruct | 0.5B | ~2-3 tok/s |
-| Qwen2.5-1.5B-Instruct | 1.5B | ~1-2 tok/s |
-| Qwen2.5-3B-Instruct | 3B | ~0.5-1 tok/s |
-
-CPU inference is slow (20-30s per response), limited to small models (0.5B-3B),
-and does not scale for concurrent users. It is suited for development,
-prototyping, data-sovereign environments, and low-traffic internal tools.
+You don't need a GPU to start. If you have an OpenShift cluster with
+OpenShift AI, you can deploy a working RAG assistant on CPU today — sign the
+model and deploy with Helm. It's slow (20-30s per response), but it's
+functional. When GPU hardware is available, the same Helm chart, signing
+workflow, and RAG pipeline carry over.
 
 ---
 
@@ -70,6 +38,14 @@ A Helm chart deploys vLLM for inference, AnythingLLM for RAG-based chat, and
 the Sigstore Model Validation Operator for model signing — all in one
 namespace. Users ask questions through AnythingLLM, which searches uploaded
 documents and sends the relevant context to vLLM for a grounded answer.
+
+vLLM is the inference engine — it loads the model and generates text. KServe
+is the Kubernetes layer that manages it: downloading the model, running health
+checks, and providing a stable endpoint. KServe supports multiple runtimes
+(vLLM, Triton, TGI, OpenVINO, and others) through its `ServingRuntime` CRD.
+The model signing and verification pipeline is runtime-independent — it
+validates model files before any inference engine starts, so switching runtimes
+doesn't affect the security guarantees.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component list, request
 flow, and container architecture.
@@ -89,7 +65,7 @@ This is not an air-gapped cluster — the cluster has internet access and
 downloads the model from HuggingFace at pod startup. But once the model is
 running, nothing leaves. For environments that require true air-gapping
 (no internet at all), the model can be pre-loaded onto a PersistentVolume
-or mirrored from an internal registry, eliminating the last external
+or served from an internal storage endpoint, eliminating the last external
 connection.
 
 **2. Only verified models are served.** Without signing, anyone with write
@@ -100,8 +76,9 @@ blocks any model that hasn't been cryptographically signed and verified. This
 is a supply chain problem that requires the same rigor as container image
 signing.
 
-Everything that follows — the signing workflow, the deployment steps, the
-verification flow — implements these two guarantees.
+The first guarantee is inherent to running inference on-cluster. Everything
+that follows — the signing workflow, deployment steps, and verification
+flow — implements the second.
 
 ---
 
@@ -116,13 +93,11 @@ for the end-to-end workflow.
 
 ## How do I get started?
 
-Three steps to go from zero to a running HR assistant:
+Two steps to go from zero to a running HR assistant:
 
-1. **Sign the model** — Download a model from HuggingFace and sign it with Sigstore (keyless OIDC). See the [Signing Guide](docs/SIGNING-GUIDE.md).
+1. **Download, sign, and upload the model** — Download a model from HuggingFace, sign it with Sigstore (keyless OIDC), and push it to your HuggingFace repository. See the [Signing Guide](docs/SIGNING-GUIDE.md).
 
-2. **Upload the model** — Push the signed model to your HuggingFace repository (e.g., `hf://YOUR_HF_USERNAME/signed-model`). The signing guide covers this end to end.
-
-3. **Deploy** — Clone the repo and run `helm install` with your model URI and signing identity. See [README.md](README.md) for prerequisites and deployment steps.
+2. **Deploy** — Clone the repo and run `helm install` with your model URI and signing identity. See [README.md](README.md) for prerequisites and deployment steps.
 
 ```bash
 git clone https://github.com/opdev/llm-cpu-serving.git && cd llm-cpu-serving/
@@ -148,17 +123,17 @@ helm install hr-assistant helm/ --namespace hr-assistant \
 
 Once the Helm chart is deployed, the
 [Model Validation Operator](https://github.com/sigstore/model-validation-operator)
-handles verification without any manual steps. Helm creates a `ModelValidation`
-CR that defines the expected signing identity, and labels the predictor pod so
-the operator's webhook can find it. The webhook injects a `model-validation`
-init container that runs before vLLM starts.
+handles verification automatically. Here's what happens:
 
-This init container checks every file in `/mnt/models` against the hashes
-recorded in `model.sig` and verifies the signing identity matches the
-`ModelValidation` CR. If everything checks out, vLLM starts normally. If
-anything is wrong — a modified file, a missing signature, a mismatched
-identity — the pod stays in `Init:CrashLoopBackOff` and the model is never
-served.
+1. Helm creates a `ModelValidation` CR with the expected signing identity
+2. Helm labels the predictor pod so the operator's webhook can find it
+3. The webhook injects a `model-validation` init container that runs before vLLM starts
+4. The init container verifies every file in `/mnt/models` against the hashes in `model.sig`
+5. It confirms the signing identity matches the `ModelValidation` CR
+
+If everything checks out, vLLM starts normally. If anything fails — a modified
+file, a missing signature, a mismatched identity — the pod stays in
+`Init:CrashLoopBackOff` and the model is never served.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the `ModelValidation` CR spec.
 
@@ -214,7 +189,7 @@ The cost advantage of CPU is that you're using already-provisioned capacity.
 The trade-off: slow responses, small models, and no path to scale. If the
 application proves valuable during the CPU prototyping phase, plan for GPU
 before going to production. The Helm chart, signing workflow, and RAG
-pipeline all transfer.
+pipeline all carry over to a GPU deployment.
 
 ---
 
