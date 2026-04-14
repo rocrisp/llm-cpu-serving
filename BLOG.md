@@ -44,14 +44,11 @@ The architecture has two parts: signing and serving.
 with [sigstore/model-transparency](https://github.com/sigstore/model-transparency) (which produces a `model.sig` file), and upload the signed model to  
 HuggingFace.
 
-**Serving** is handled by a Helm chart that deploys vLLM for inference,  
-AnythingLLM for RAG-based chat, and the [Model Validation Operator](https://github.com/sigstore/model-validation-operator) for verification.
-
-Before the model is served, KServe downloads it, the operator
-verifies it against `model.sig`, and only then does inference begin.
-
-Users ask questions through AnythingLLM, which searches uploaded documents and sends  
-the relevant context to vLLM for a grounded answer.
+**Serving** is handled by a Helm chart that deploys  
+[KServe](https://kserve.github.io/website/) (included with OpenShift AI),  
+vLLM as the inference engine, AnythingLLM for RAG-based chat, and the  
+[Model Validation Operator](https://github.com/sigstore/model-validation-operator)  
+for verifying model file integrity against `model.sig`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component list, request
 flow, and container architecture.
